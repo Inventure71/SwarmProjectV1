@@ -148,6 +148,12 @@ class PathSimulatorReal:
         self.path_points = []
         self.robot_name = robot_name
         
+        # Drawing mode state
+        self.drawing_mode = False
+        self.is_drawing = False
+        self.last_draw_point = None
+        self.draw_sample_distance = 15  # pixels between sampled points
+        
         # Load config
         print(f"\n[Controller] Loading configuration...")
         self.config = load_config()
@@ -180,6 +186,21 @@ class PathSimulatorReal:
         # Settings
         self.use_prediction = True
         self.estimated_delay_ms = 100
+        
+        # Motion parameters (tuned for smoother movement)
+        self.waypoint_tolerance = 0.20          # Distance to reach waypoint (m)
+        self.turn_in_place_threshold = 80.0     # Only turn in place if > 80° off
+        self.proportional_gain = 3.5            # Turn rate gain
+        self.max_turn_rate = 85.0               # Max turn rate deg/s (robot max is ~86°/s)
+        
+        # Speed control based on distance
+        self.slow_down_distance = 0.5           # Start slowing at this distance (m)
+        self.min_speed_ratio = 0.4              # Minimum speed when very close (40%)
+        
+        # Look-ahead parameters
+        self.look_ahead_distance = 0.4          # Distance at which to start blending next waypoint
+        self.last_direction_command = 1         # Track last command for smooth speed control
+        self.move_counter = 0                   # Counter for duty cycle speed control
         
         self._setup_ui()
         
@@ -216,6 +237,14 @@ class PathSimulatorReal:
         )
         prediction_check.pack(side=tk.LEFT, padx=10)
         
+        # Drawing mode toggle
+        self.draw_mode_btn = tk.Button(
+            settings_frame, text="✏️ Draw Mode", font=('Arial', 9),
+            bg='#555', fg='#fff', command=self._toggle_draw_mode,
+            padx=10, pady=4
+        )
+        self.draw_mode_btn.pack(side=tk.LEFT, padx=10)
+        
         self.status_label = tk.Label(
             self.root, text="Not connected", font=('Arial', 10),
             bg='#1e1e1e', fg='#FFA500'
@@ -233,12 +262,15 @@ class PathSimulatorReal:
         
         self._draw_grid()
         self.canvas.bind('<Button-1>', self._on_canvas_click)
+        self.canvas.bind('<B1-Motion>', self._on_canvas_drag)
+        self.canvas.bind('<ButtonRelease-1>', self._on_canvas_release)
         
         control_frame = tk.Frame(self.root, bg='#1e1e1e')
         control_frame.pack(pady=8)
         
         self.cmd_label = tk.Label(
-            control_frame, text="Ready", font=('Arial', 10, 'bold'),
+            control_frame, text="Click to add waypoints or use Draw Mode", 
+            font=('Arial', 10, 'bold'),
             bg='#1e1e1e', fg='#888'
         )
         self.cmd_label.pack(pady=3)
@@ -335,19 +367,76 @@ class PathSimulatorReal:
         y_m = (y - self.canvas_height / 2) / self.scale
         return x_m, y_m
     
+    def _toggle_draw_mode(self):
+        """Toggle between click and draw modes."""
+        self.drawing_mode = not self.drawing_mode
+        if self.drawing_mode:
+            self.draw_mode_btn.config(bg='#4CAF50', text="✏️ Drawing ON")
+            self.cmd_label.config(text="Draw mode: Drag to draw path", fg='#4CAF50')
+            self.canvas.config(cursor="pencil")
+        else:
+            self.draw_mode_btn.config(bg='#555', text="✏️ Draw Mode")
+            self.cmd_label.config(text="Click mode: Click to add waypoints", fg='#888')
+            self.canvas.config(cursor="")
+    
     def _on_canvas_click(self, event):
-        """Add waypoint."""
+        """Handle canvas click - add waypoint in click mode, start drawing in draw mode."""
         if self.is_animating or not self.tracking_active:
             return
         
         x, y = event.x, event.y
+        
+        if self.drawing_mode:
+            # Start drawing
+            self.is_drawing = True
+            self.last_draw_point = (x, y)
+            self._add_waypoint(x, y)
+        else:
+            # Click mode - add single waypoint
+            self._add_waypoint(x, y)
+    
+    def _on_canvas_drag(self, event):
+        """Handle canvas drag - add waypoints while drawing."""
+        if not self.drawing_mode or not self.is_drawing:
+            return
+        
+        if self.is_animating or not self.tracking_active:
+            return
+        
+        x, y = event.x, event.y
+        
+        # Only add point if far enough from last point
+        if self.last_draw_point is not None:
+            dx = x - self.last_draw_point[0]
+            dy = y - self.last_draw_point[1]
+            dist = math.sqrt(dx**2 + dy**2)
+            
+            if dist >= self.draw_sample_distance:
+                self._add_waypoint(x, y)
+                self.last_draw_point = (x, y)
+    
+    def _on_canvas_release(self, event):
+        """Handle mouse release - stop drawing."""
+        if self.drawing_mode:
+            self.is_drawing = False
+            self.last_draw_point = None
+    
+    def _add_waypoint(self, x, y):
+        """Add a waypoint at the given canvas coordinates."""
         self.path_points.append((x, y))
         
-        self.canvas.create_oval(x - 5, y - 5, x + 5, y + 5,
-                               fill='#4CAF50', outline='#fff', tags='waypoint')
-        self.canvas.create_text(x, y - 15, text=str(len(self.path_points)),
-                               fill='#4CAF50', font=('Arial', 10, 'bold'), tags='waypoint')
+        # Draw waypoint marker (smaller in draw mode)
+        if self.drawing_mode:
+            size = 3
+            self.canvas.create_oval(x - size, y - size, x + size, y + size,
+                                   fill='#4CAF50', outline='#4CAF50', tags='waypoint')
+        else:
+            self.canvas.create_oval(x - 5, y - 5, x + 5, y + 5,
+                                   fill='#4CAF50', outline='#fff', tags='waypoint')
+            self.canvas.create_text(x, y - 15, text=str(len(self.path_points)),
+                                   fill='#4CAF50', font=('Arial', 10, 'bold'), tags='waypoint')
         
+        # Draw line to previous point
         if len(self.path_points) > 1:
             prev_x, prev_y = self.path_points[-2]
             self.canvas.create_line(prev_x, prev_y, x, y, fill='#4CAF50', width=2, tags='path_line')
@@ -516,16 +605,20 @@ class PathSimulatorReal:
         # Convert waypoints to meters
         waypoints_meters = [self._canvas_to_world(x, y) for x, y in self.path_points]
         
-        # Create follower
+        # Create follower with tuned parameters
         self.follower = PathFollower(
             waypoints=waypoints_meters,
-            waypoint_tolerance=0.15,
+            waypoint_tolerance=self.waypoint_tolerance,
+            turn_in_place_threshold=self.turn_in_place_threshold,
+            proportional_gain=self.proportional_gain,
+            max_turn_rate=self.max_turn_rate,
             use_prediction=self.use_prediction,
             estimated_delay_ms=self.estimated_delay_ms
         )
         
         self.is_animating = True
         self.last_control_time = time.time()
+        self.move_counter = 0  # Reset speed control counter
         
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
@@ -535,7 +628,7 @@ class PathSimulatorReal:
         self._control_loop()
     
     def _control_loop(self):
-        """Control loop."""
+        """Control loop with distance-based speed control."""
         if not self.is_animating:
             return
         
@@ -560,13 +653,88 @@ class PathSimulatorReal:
         self.follower.update_position(x, y, yaw)
         direction, turn_rate = self.follower.compute_command()
         
-        # Send command (invert angle sign: robot expects positive = left turn)
-        self.controller.send_command(direction, -turn_rate)
+        # Calculate distance to current waypoint for speed scaling
+        state = self.follower.get_state()
+        distance_to_waypoint = state['distance_to_target'] if state['distance_to_target'] is not None else 999
+        
+        # Implement look-ahead: when close to waypoint, blend direction toward next waypoint
+        if direction == 1 and distance_to_waypoint < self.look_ahead_distance:
+            current_idx = state['waypoint_index']
+            # Check if there's a next waypoint
+            if current_idx + 1 < state['total_waypoints']:
+                # Get current and next waypoint
+                current_target = state['target']
+                next_target = self.follower.waypoints[current_idx + 1]
+                
+                # Calculate angle to next waypoint
+                dx_next = next_target[0] - x
+                dy_next = next_target[1] - y
+                desired_yaw_next = math.atan2(dy_next, dx_next)
+                
+                # Calculate angle difference to next waypoint
+                angle_diff_next = desired_yaw_next - yaw
+                while angle_diff_next > math.pi:
+                    angle_diff_next -= 2 * math.pi
+                while angle_diff_next < -math.pi:
+                    angle_diff_next += 2 * math.pi
+                angle_diff_next_deg = math.degrees(angle_diff_next)
+                
+                # Blend between current and next waypoint based on distance
+                # Closer to waypoint = more weight on next waypoint
+                blend_ratio = 1.0 - (distance_to_waypoint / self.look_ahead_distance)
+                blend_ratio = max(0.0, min(1.0, blend_ratio))
+                
+                # Calculate current angle difference
+                angle_diff_current = state['angle_to_target']
+                if angle_diff_current is not None:
+                    angle_diff_current_deg = math.degrees(angle_diff_current)
+                    
+                    # Blend the two angles
+                    blended_angle_diff = (1.0 - blend_ratio) * angle_diff_current_deg + \
+                                        blend_ratio * angle_diff_next_deg
+                    
+                    # Recalculate turn rate with blended angle
+                    turn_rate = max(-self.max_turn_rate,
+                                  min(self.max_turn_rate, 
+                                      blended_angle_diff * self.proportional_gain))
+        
+        # Apply distance-based speed control (only very close to waypoint)
+        final_direction = direction
+        if direction == 1:  # Only apply speed control when moving forward
+            # Only slow down when VERY close to the last waypoint
+            is_last_waypoint = (state['waypoint_index'] + 1 >= state['total_waypoints'])
+            
+            if is_last_waypoint and distance_to_waypoint < self.slow_down_distance:
+                # Calculate speed ratio based on distance (linear interpolation)
+                # Close to waypoint: min_speed_ratio, far: 1.0
+                speed_ratio = self.min_speed_ratio + \
+                             (1.0 - self.min_speed_ratio) * \
+                             (distance_to_waypoint / self.slow_down_distance)
+                speed_ratio = max(self.min_speed_ratio, min(1.0, speed_ratio))
+                
+                # Use counter-based duty cycle for speed control
+                # Increment counter and check if we should move this cycle
+                self.move_counter += 1
+                cycle_length = 10  # 10 control cycles = 1 second
+                move_cycles = int(cycle_length * speed_ratio)
+                
+                if (self.move_counter % cycle_length) >= move_cycles:
+                    # Skip this move cycle to slow down
+                    final_direction = 0
+                    # Keep turning if we're not already turning in place
+                    if direction == 1:
+                        turn_rate = turn_rate  # Keep the turn rate
+            else:
+                # Full speed when not the last waypoint or far from waypoint
+                self.move_counter = 0  # Reset counter when far
+        
+        # Send command (angle inverted in send_command at line 106)
+        self.controller.send_command(final_direction, -turn_rate)
         
         # Update status
-        state = self.follower.get_state()
         self.cmd_label.config(
-            text=f"Waypoint {state['waypoint_index']+1}/{state['total_waypoints']}"
+            text=f"Waypoint {state['waypoint_index']+1}/{state['total_waypoints']} | "
+                 f"Dist: {distance_to_waypoint:.2f}m"
         )
         
         self.root.after(10, self._control_loop)
@@ -611,11 +779,18 @@ class PathSimulatorReal:
         self.path_points = []
         self.follower = None
         
+        # Reset drawing state
+        self.is_drawing = False
+        self.last_draw_point = None
+        
         self.canvas.delete('waypoint')
         self.canvas.delete('path_line')
         
         self.start_btn.config(state=tk.DISABLED)
-        self.cmd_label.config(text="Cleared", fg='#888')
+        if self.drawing_mode:
+            self.cmd_label.config(text="Draw mode: Drag to draw path", fg='#4CAF50')
+        else:
+            self.cmd_label.config(text="Cleared", fg='#888')
     
     def shutdown(self):
         """Shutdown."""
