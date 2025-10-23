@@ -99,6 +99,12 @@ class RobotControllerApp:
         self.min_speed_ratio = 0.05
         self.curvature_speed_gain = 1.2
         self.look_ahead_distance = 0.4
+        self.path_simplification_tolerance = 0.06
+        self.min_waypoint_separation = 0.15
+        self.segment_pass_distance = 0.09
+        self.segment_pass_lateral_factor = 1.7
+        self.waypoint_approach_slowdown = 0.45
+        self.corner_keep_angle_deg = 22.0
         self.last_throttle_command = 0.0
         
     def _setup_ui(self):
@@ -717,7 +723,13 @@ class RobotControllerApp:
             estimated_delay_ms=self.estimated_delay_ms,
             curvature_speed_gain=self.curvature_speed_gain,
             min_speed_ratio=self.min_speed_ratio,
-            slow_down_distance=self.slow_down_distance
+            slow_down_distance=self.slow_down_distance,
+            path_simplification_tolerance=self.path_simplification_tolerance,
+            min_waypoint_separation=self.min_waypoint_separation,
+            segment_pass_distance=self.segment_pass_distance,
+            segment_pass_lateral_factor=self.segment_pass_lateral_factor,
+            waypoint_approach_slowdown=self.waypoint_approach_slowdown,
+            corner_keep_angle_deg=self.corner_keep_angle_deg
         )
         
         self.is_animating = True

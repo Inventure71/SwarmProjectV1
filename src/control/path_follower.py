@@ -100,7 +100,13 @@ class PathFollower:
                  estimated_delay_ms=100,
                  curvature_speed_gain=1.2,
                  min_speed_ratio=0.05,
-                 slow_down_distance=0.5):
+                 slow_down_distance=0.5,
+                 path_simplification_tolerance=0.05,
+                 min_waypoint_separation=0.12,
+                 segment_pass_distance=0.08,
+                 segment_pass_lateral_factor=1.5,
+                 waypoint_approach_slowdown=0.4,
+                 corner_keep_angle_deg=20.0):
         """
         Initialize path follower.
         
@@ -116,7 +122,15 @@ class PathFollower:
             min_speed_ratio: Minimum throttle to apply while moving forward
             slow_down_distance: Distance from final waypoint to start slowing down (meters)
         """
-        self.waypoints = waypoints if waypoints is not None else []
+        self.path_simplification_tolerance = max(0.0, path_simplification_tolerance)
+        self.min_waypoint_separation = max(0.0, min_waypoint_separation)
+        self.segment_pass_distance = max(0.0, segment_pass_distance)
+        self.segment_pass_lateral_factor = max(1.0, segment_pass_lateral_factor)
+        self.waypoint_approach_slowdown = max(0.0, waypoint_approach_slowdown)
+        self.corner_keep_angle_rad = math.radians(max(0.0, corner_keep_angle_deg))
+
+        self.raw_waypoints = list(waypoints) if waypoints is not None else []
+        self.waypoints = self._process_waypoints(self.raw_waypoints)
         self.waypoint_tolerance = waypoint_tolerance
         self.turn_in_place_threshold = turn_in_place_threshold
         self.proportional_gain = proportional_gain
@@ -135,16 +149,21 @@ class PathFollower:
         
     def set_waypoints(self, waypoints):
         """Set new waypoints and reset to beginning."""
-        self.waypoints = waypoints
+        self.raw_waypoints = list(waypoints)
+        self.waypoints = self._process_waypoints(self.raw_waypoints)
         self.current_waypoint_index = 0
         self.predictor.reset()  # Reset predictor when setting new waypoints
         
     def add_waypoint(self, x, y):
         """Add a waypoint to the path."""
-        self.waypoints.append((x, y))
-        
+        self.raw_waypoints.append((x, y))
+        self.waypoints = self._process_waypoints(self.raw_waypoints)
+        if self.waypoints:
+            self.current_waypoint_index = min(self.current_waypoint_index, len(self.waypoints) - 1)
+
     def clear_waypoints(self):
         """Clear all waypoints."""
+        self.raw_waypoints = []
         self.waypoints = []
         self.current_waypoint_index = 0
         
@@ -220,9 +239,9 @@ class PathFollower:
         dx = target_x - control_x
         dy = target_y - control_y
         distance = math.sqrt(dx**2 + dy**2)
-        
-        # Check if waypoint reached
-        if distance < self.waypoint_tolerance:
+
+        # Check if waypoint reached or safely passed
+        if self._should_advance_waypoint(distance, control_x, control_y, robot_x, robot_y):
             self.current_waypoint_index += 1
             # Recursively check next waypoint, but limit depth to avoid infinite loops
             if self.current_waypoint_index < len(self.waypoints):
@@ -282,6 +301,15 @@ class PathFollower:
                 high_angle = abs(angle_diff_deg) > self.turn_in_place_threshold * self.soft_turn_stop_ratio
                 if high_angle and distance < self.soft_turn_stop_distance:
                     throttle = 0.0
+
+            if throttle > 0.0 and self.waypoint_approach_slowdown > 1e-6:
+                if distance < self.waypoint_approach_slowdown:
+                    distance_scale = max(0.0, min(1.0, distance / self.waypoint_approach_slowdown))
+                    throttle = min(throttle, distance_scale)
+                if distance < self.waypoint_tolerance * 2.0:
+                    denom = max(self.waypoint_tolerance * 2.0, 1e-6)
+                    close_scale = distance / denom
+                    throttle = min(throttle, close_scale)
         
         # Final safety check on turn rate
         if not math.isfinite(turn_rate):
@@ -293,6 +321,145 @@ class PathFollower:
         throttle = max(0.0, min(1.0, throttle))
         
         return throttle, turn_rate
+
+    def _process_waypoints(self, waypoints):
+        """Simplify and space waypoints for smoother tracking."""
+        if not waypoints:
+            return []
+
+        processed = list(waypoints)
+
+        if self.path_simplification_tolerance > 1e-6 and len(processed) > 2:
+            processed = self._simplify_rdp(processed, self.path_simplification_tolerance)
+
+        if self.min_waypoint_separation > 1e-6 and len(processed) > 1:
+            processed = self._enforce_min_spacing(processed, self.min_waypoint_separation)
+
+        return processed
+
+    def _simplify_rdp(self, points, epsilon):
+        """Ramer-Douglas-Peucker simplification."""
+        if len(points) < 3:
+            return list(points)
+
+        start = points[0]
+        end = points[-1]
+        index = -1
+        max_distance = 0.0
+
+        for i in range(1, len(points) - 1):
+            distance = self._point_to_segment_distance(points[i], start, end)
+            if distance > max_distance:
+                max_distance = distance
+                index = i
+
+        if max_distance > epsilon:
+            left = self._simplify_rdp(points[: index + 1], epsilon)
+            right = self._simplify_rdp(points[index:], epsilon)
+            return left[:-1] + right
+
+        return [start, end]
+
+    def _enforce_min_spacing(self, points, min_distance):
+        """Ensure minimum spacing while preserving sharp corners."""
+        if len(points) <= 2:
+            return list(points)
+
+        filtered = [points[0]]
+        for i in range(1, len(points) - 1):
+            candidate = points[i]
+            last_kept = filtered[-1]
+            dist_last = math.hypot(candidate[0] - last_kept[0], candidate[1] - last_kept[1])
+
+            if dist_last >= min_distance:
+                filtered.append(candidate)
+                continue
+
+            next_point = points[i + 1]
+            v1 = (candidate[0] - last_kept[0], candidate[1] - last_kept[1])
+            v2 = (next_point[0] - candidate[0], next_point[1] - candidate[1])
+            angle = self._angle_between(v1, v2)
+
+            if angle >= self.corner_keep_angle_rad:
+                filtered.append(candidate)
+
+        filtered.append(points[-1])
+        return filtered
+
+    def _point_to_segment_distance(self, point, start, end):
+        """Compute perpendicular distance from point to segment."""
+        sx, sy = start
+        ex, ey = end
+        px, py = point
+        seg_dx = ex - sx
+        seg_dy = ey - sy
+        seg_len_sq = seg_dx ** 2 + seg_dy ** 2
+
+        if seg_len_sq < 1e-9:
+            return math.hypot(px - sx, py - sy)
+
+        t = ((px - sx) * seg_dx + (py - sy) * seg_dy) / seg_len_sq
+        t = max(0.0, min(1.0, t))
+        proj_x = sx + t * seg_dx
+        proj_y = sy + t * seg_dy
+        return math.hypot(px - proj_x, py - proj_y)
+
+    def _angle_between(self, vec_a, vec_b):
+        """Compute angle between two vectors."""
+        ax, ay = vec_a
+        bx, by = vec_b
+        norm_a = math.hypot(ax, ay)
+        norm_b = math.hypot(bx, by)
+        if norm_a < 1e-9 or norm_b < 1e-9:
+            return 0.0
+        dot = ax * bx + ay * by
+        cos_angle = max(-1.0, min(1.0, dot / (norm_a * norm_b)))
+        return math.acos(cos_angle)
+
+    def _should_advance_waypoint(self, distance, control_x, control_y, robot_x, robot_y):
+        """Decide if current waypoint can be considered reached or safely passed."""
+        if distance < self.waypoint_tolerance:
+            return True
+
+        idx = self.current_waypoint_index
+        if idx + 1 >= len(self.waypoints):
+            return False
+
+        target = self.waypoints[idx]
+        next_target = self.waypoints[idx + 1]
+
+        seg_dx = next_target[0] - target[0]
+        seg_dy = next_target[1] - target[1]
+        seg_len = math.hypot(seg_dx, seg_dy)
+
+        if seg_len < 1e-6:
+            return True
+
+        vector_to_robot = (robot_x - target[0], robot_y - target[1])
+        parallel = (vector_to_robot[0] * seg_dx + vector_to_robot[1] * seg_dy) / seg_len
+
+        if parallel < 0.0:
+            return False
+
+        lateral = abs(vector_to_robot[0] * seg_dy - vector_to_robot[1] * seg_dx) / seg_len
+        lateral_limit = self.waypoint_tolerance * self.segment_pass_lateral_factor
+
+        if lateral > lateral_limit:
+            return False
+
+        if seg_len <= max(self.min_waypoint_separation * 0.5, self.segment_pass_distance * 0.75):
+            return True
+
+        pass_margin = max(self.segment_pass_distance, seg_len * 0.1)
+        pass_threshold = seg_len - pass_margin
+
+        if parallel >= pass_threshold:
+            return True
+
+        if parallel >= seg_len and lateral <= lateral_limit * 0.8:
+            return True
+
+        return False
     
     def get_state(self):
         """
