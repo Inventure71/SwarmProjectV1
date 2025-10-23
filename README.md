@@ -125,8 +125,9 @@ python3 move.py client <server_ip> 6969
 **Command Format:**
 ```json
 {
-  "direction": 0/1,  // 0=turn in place, 1=move forward
-  "angle": float     // degrees/second (positive=left, negative=right)
+  "throttle": float,  // -1.0 = full reverse, 0.0 = stop, 1.0 = full forward
+  "angle": float,     // degrees/second (positive=left, negative=right)
+  "direction": 0/1    // legacy compatibility; derived from throttle
 }
 ```
 
@@ -222,6 +223,6 @@ follower = PathFollower(
 while not follower.is_complete():
     x, y, yaw = tracker.robots['umh_5'].get_position()
     follower.update_position(x, y, yaw)
-    direction, turn_rate = follower.compute_command()
-    controller.send_command(direction, turn_rate)
+    throttle, turn_rate = follower.compute_command()
+    controller.send_command(throttle, turn_rate)
 ```

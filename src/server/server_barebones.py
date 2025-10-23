@@ -2,7 +2,8 @@
 """
 Barebones CLI Server for Robot Control
 Accepts user input and broadcasts commands to connected robot clients.
-Commands are sent as JSON: {"direction": 0/1, "angle": degrees_per_sec}
+Commands are sent as JSON: {"throttle": 0..1, "angle": degrees_per_sec}
+Legacy clients expecting {"direction": 0/1, ...} still receive that field.
 """
 
 import socket
@@ -37,9 +38,15 @@ class BarebonesServer:
             client_socket.close()
             print(f"[SERVER] Client {address} disconnected")
     
-    def broadcast_command(self, direction, angle):
+    def broadcast_command(self, throttle, angle):
         """Send command to all connected clients."""
-        cmd = {"direction": direction, "angle": angle}
+        try:
+            throttle_val = float(throttle)
+        except (TypeError, ValueError):
+            throttle_val = 0.0
+        throttle_val = max(-1.0, min(1.0, throttle_val))
+        legacy_direction = 1 if throttle_val > 1e-3 else 0
+        cmd = {"throttle": throttle_val, "direction": legacy_direction, "angle": angle}
         msg = json.dumps(cmd) + '\n'
         
         with self.clients_lock:
@@ -59,7 +66,7 @@ class BarebonesServer:
                 except:
                     pass
         
-        print(f"[SERVER] Broadcasted: direction={direction}, angle={angle} to {len(self.clients)} client(s)")
+        print(f"[SERVER] Broadcasted: throttle={throttle_val:.2f}, angle={angle} to {len(self.clients)} client(s)")
     
     def run(self):
         """Start the server and accept connections."""
@@ -101,11 +108,11 @@ class BarebonesServer:
         # Interactive command loop
         print("\n=== Barebones Robot Control Server ===")
         print("Commands:")
-        print("  <direction> <angle>  - Send command (direction: 0/1, angle: deg/s)")
+        print("  <throttle> <angle>  - Send command (throttle: -1..1, angle: deg/s)")
         print("  Examples:")
         print("    1 0      - Move forward straight")
-        print("    1 60     - Move forward, turn left 60 deg/s")
-        print("    1 -45    - Move forward, turn right 45 deg/s")
+        print("    0.6 60   - Move forward at 60%, turn left 60 deg/s")
+        print("   -0.5 0    - Move backward at 50%")
         print("    0 90     - Stop linear, turn in place 90 deg/s")
         print("    0 0      - Full stop")
         print("  quit       - Exit server")
@@ -125,21 +132,19 @@ class BarebonesServer:
                     
                     parts = user_input.split()
                     if len(parts) != 2:
-                        print("[SERVER] Invalid format. Use: <direction> <angle>")
+                        print("[SERVER] Invalid format. Use: <throttle> <angle>")
                         continue
                     
                     try:
-                        direction = int(parts[0])
+                        throttle = float(parts[0])
                         angle = float(parts[1])
-                        
-                        if direction not in [0, 1]:
-                            print("[SERVER] Direction must be 0 or 1")
+                        if throttle < -1.0 or throttle > 1.0:
+                            print("[SERVER] Throttle must be between -1 and 1")
                             continue
-                        
-                        self.broadcast_command(direction, angle)
+                        self.broadcast_command(throttle, angle)
                         
                     except ValueError:
-                        print("[SERVER] Invalid numbers. Use: <direction(0/1)> <angle(float)>")
+                        print("[SERVER] Invalid numbers. Use: <throttle(-1..1)> <angle(float)>")
                         
                 except EOFError:
                     break
@@ -176,4 +181,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

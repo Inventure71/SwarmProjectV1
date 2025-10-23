@@ -1,10 +1,10 @@
 # Simple ROS 2 robot movement controller for cmd_vel
-# - Uses direction value (0 or 1) and angle for movement
-# - Turn while moving (linear.x + angular.z)
+# - Uses throttle value (-1.0 to 1.0) and angle for movement
+# - Turn while moving (linear.x + angular.z) without resorting to stop-and-turn
 #
 # Usage:
-#   direction: 0 = stop, 1 = move forward
-#   angle: angle in radians to turn (positive = left, negative = right)
+#   throttle: -1.0 = full speed reverse, 0.0 = stop, 1.0 = full speed forward
+#   angle: angle in radians to turn (positive = left turn, negative = right turn)
 #   max_linear: maximum linear speed (m/s)
 #   max_angular: maximum angular speed (rad/s)
 
@@ -19,19 +19,20 @@ import socket
 import json
 import sys
 
-def calculate_movement(direction, angle):
+def calculate_movement(throttle, angle):
     """
-    Calculate linear and angular velocities based on direction and angle.
+    Calculate normalized linear and angular targets based on throttle and angle.
     
     Args:
-        direction: 0 = stop, 1 = move forward
+        throttle: forward command scaled -1..1
         angle: angle in radians (positive = left turn, negative = right turn)
     
     Returns:
         tuple: (linear_velocity, angular_velocity)
     """
-    # Linear component depends on direction; angular is passed through (factor)
-    linear_vel = 1.0 if direction == 1 else 0.0
+    # Linear component depends on throttle; angular is passed through (factor)
+    throttle = max(-1.0, min(1.0, float(throttle)))
+    linear_vel = throttle
     angular_vel = angle
     return (linear_vel, angular_vel)
 
@@ -57,7 +58,6 @@ class RobotController(Node):
         self.ang = 0.0
 
         self.rate_hz = 20.0
-        self.turn_burst_sec = 0.8  # duration for in-place turn when over max
         self.timer = self.create_timer(1.0 / self.rate_hz, self._on_timer)
         self.get_logger().info("Robot controller started.")
 
@@ -76,20 +76,20 @@ class RobotController(Node):
             msg.angular.z = max(-self.max_ang, min(self.max_ang, self.ang))
             self.publisher_.publish(msg)
 
-    def set_movement(self, direction, angle):
+    def set_movement(self, throttle, angle):
         """
-        Set robot movement based on direction and angle in degrees per second.
+        Set robot movement based on throttle and angle in degrees per second.
         
         Args:
-            direction: 0 = stop, 1 = move forward (will be coerced to int 0/1)
+            throttle: forward command ratio (will be clamped to -1..1)
             angle: desired yaw rate in degrees per second (positive = left, negative = right)
         """
         # Coerce incoming values to correct types
         try:
-            dir_val = int(direction)
+            throttle_val = float(throttle)
         except (TypeError, ValueError):
-            dir_val = 0
-        dir_val = 1 if dir_val == 1 else 0
+            throttle_val = 0.0
+        throttle_val = max(-1.0, min(1.0, throttle_val))
 
         try:
             angle_val_deg = float(angle)
@@ -103,30 +103,10 @@ class RobotController(Node):
         else:
             angle_factor = 0.0
         
-        # Case 1: turn in place when direction == 0
-        if dir_val == 0 and angle_rate_rad != 0.0:
+        # Turn in place when throttle is zero
+        if abs(throttle_val) <= 1e-3:
             self.lin = 0.0
-            # clamp to max
             self.ang = max(-self.max_ang, min(self.max_ang, angle_rate_rad))
-            self._print_status()
-            self._publish_immediate()
-            return
-
-        # Case 2: requested rate exceeds max while moving forward -> turn in place briefly, then go
-        if dir_val == 1 and abs(angle_rate_rad) > self.max_ang + 1e-6:
-            # stop linear, turn at max rate in requested direction
-            self.lin = 0.0
-            self.ang = self.max_ang if angle_rate_rad > 0.0 else -self.max_ang
-            self._print_status()
-            self._publish_immediate()
-            # perform brief in-place turn burst
-            t_end = time.time() + self.turn_burst_sec
-            while time.time() < t_end and rclpy.ok():
-                rclpy.spin_once(self, timeout_sec=0.0)
-                time.sleep(1.0 / self.rate_hz)
-            # then proceed forward straight
-            self.lin = self.max_lin
-            self.ang = 0.0
             self._print_status()
             self._publish_immediate()
             return
@@ -136,7 +116,7 @@ class RobotController(Node):
             angle_factor = 1.0
         elif angle_factor < -1.0:
             angle_factor = -1.0
-        lin_dir, ang_dir = calculate_movement(dir_val, angle_factor)
+        lin_dir, ang_dir = calculate_movement(throttle_val, angle_factor)
         self.lin = lin_dir * self.max_lin
         self.ang = ang_dir * self.max_ang
         self._print_status()
@@ -171,8 +151,10 @@ class RobotController(Node):
 def run_client_mode(host='10.205.3.47', port=6969):
     """
     Client mode: connects to a remote server and receives commands.
-    Commands are JSON: {"direction": 0/1, "angle": degrees_per_sec}
+    Commands are JSON: {"throttle": -1..1, "angle": degrees_per_sec}
+    Legacy messages using {"direction": 0/1, "angle": ...} are still supported.
     Retries connection indefinitely until successful or keyboard interrupted.
+    Automatically reconnects if connection is lost.
     """
     rclpy.init()
     node = RobotController(max_linear=0.5, max_angular=1.5, use_stamped=True, frame_id='base_link')
@@ -182,72 +164,74 @@ def run_client_mode(host='10.205.3.47', port=6969):
     spinner.start()
     
     sock = None
-    connected = False
     try:
-        while not connected:
-            try:
-                print(f"[CLIENT] Connecting to server at {host}:{port}...")
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.connect((host, port))
-                connected = True
-                print(f"[CLIENT] Connected to {host}:{port}")
-                sock.settimeout(0.1)
-            except KeyboardInterrupt:
-                print("\n[CLIENT] Keyboard interrupt. Exiting connection loop.")
-                node.stop()
-                if sock:
-                    sock.close()
-                if node.use_stamped:
-                    stop = TwistStamped()
-                    stop.header.stamp = node.get_clock().now().to_msg()
-                    stop.header.frame_id = node.frame_id
-                    node.publisher_.publish(stop)
-                else:
-                    stop = Twist()
-                    node.publisher_.publish(stop)
-                rclpy.shutdown()
-                print("[CLIENT] Exiting.")
-                return
-            except Exception as e:
-                print(f"[CLIENT] Connection failed: {e}")
-                if sock:
-                    sock.close()
-                print("[CLIENT] Retrying in 1 second... (Press Ctrl+C to stop)")
-                time.sleep(1.0)
-        
-        buffer = ""
         while rclpy.ok():
+            # Stop robot while disconnected
+            node.stop()
+            
+            # Connection loop
+            connected = False
+            while not connected and rclpy.ok():
+                try:
+                    print(f"[CLIENT] Connecting to server at {host}:{port}...")
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.connect((host, port))
+                    connected = True
+                    print(f"[CLIENT] Connected to {host}:{port}")
+                    sock.settimeout(0.1)
+                except KeyboardInterrupt:
+                    raise  # Re-raise to be caught by outer try-except
+                except Exception as e:
+                    print(f"[CLIENT] Connection failed: {e}")
+                    if sock:
+                        sock.close()
+                        sock = None
+                    print("[CLIENT] Retrying in 1 second... (Press Ctrl+C to stop)")
+                    time.sleep(1.0)
+            
+            if not connected:
+                break  # Exit if not connected and rclpy not ok
+            
+            # Message receiving loop
+            buffer = ""
             try:
-                data = sock.recv(1024)
-                if not data:
-                    print("[CLIENT] Server disconnected")
-                    break
+                while rclpy.ok():
+                    try:
+                        data = sock.recv(1024)
+                        if not data:
+                            print("[CLIENT] Server disconnected, stopping robot and reconnecting...")
+                            node.stop()
+                            break
+                            
+                        buffer += data.decode('utf-8')
+                        # Process complete JSON messages (newline-delimited)
+                        while '\n' in buffer:
+                            line, buffer = buffer.split('\n', 1)
+                            if line.strip():
+                                try:
+                                    cmd = json.loads(line)
+                                    throttle = cmd.get('throttle')
+                                    if throttle is None:
+                                        throttle = cmd.get('direction', 0)
+                                    angle = cmd.get('angle', 0.0)
+                                    node.set_movement(throttle=throttle, angle=angle)
+                                except json.JSONDecodeError as e:
+                                    print(f"[CLIENT] JSON decode error: {e}")
+                    except socket.timeout:
+                        continue
+                    except KeyboardInterrupt:
+                        raise  # Re-raise to be caught by outer try-except
+                    except Exception as e:
+                        print(f"[CLIENT] Connection error: {e}, stopping robot and reconnecting...")
+                        node.stop()
+                        break
+            finally:
+                if sock:
+                    sock.close()
+                    sock = None
                     
-                buffer += data.decode('utf-8')
-                # Process complete JSON messages (newline-delimited)
-                while '\n' in buffer:
-                    line, buffer = buffer.split('\n', 1)
-                    if line.strip():
-                        try:
-                            cmd = json.loads(line)
-                            direction = cmd.get('direction', 0)
-                            angle = cmd.get('angle', 0.0)
-                            node.set_movement(direction=direction, angle=angle)
-                        except json.JSONDecodeError as e:
-                            print(f"[CLIENT] JSON decode error: {e}")
-            except socket.timeout:
-                continue
-            except KeyboardInterrupt:
-                print("\n[CLIENT] Stopping...")
-                break
-            except Exception as e:
-                print(f"[CLIENT] Error: {e}")
-                break
-                
     except KeyboardInterrupt:
         print("\n[CLIENT] Stopping...")
-    except Exception as e:
-        print(f"[CLIENT] Connection error: {e}")
     finally:
         node.stop()
         if sock:
@@ -281,29 +265,29 @@ def main():
 
         try:
             print("Moving forward for 2s")
-            node.set_movement(direction=1, angle=0.0)
+            node.set_movement(throttle=1.0, angle=0.0)
             t_end = time.time() + 2.0
             while time.time() < t_end and rclpy.ok():
                 rclpy.spin_once(node, timeout_sec=0.0)
                 time.sleep(0.1)
 
             print("Turning left for 2s")
-            node.set_movement(direction=1, angle=0.3)
+            node.set_movement(throttle=1.0, angle=0.3)
             t_end = time.time() + 2.0
             while time.time() < t_end and rclpy.ok():
                 rclpy.spin_once(node, timeout_sec=0.0)
                 time.sleep(0.1)
 
             print("Stopping")
-            node.set_movement(direction=0, angle=0.0)
+            node.set_movement(throttle=0.0, angle=0.0)
             # Spin in background so timers keep firing during interactive input
             spinner = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
             spinner.start()
-            print("\nStandalone mode: Enter commands (direction angle)")
-            print("Example: '1 60' = forward with 60 deg/s turn")
+            print("\nStandalone mode: Enter commands (throttle angle)")
+            print("Example: '0.8 60' = forward at 80% with 60 deg/s turn")
             while True:
-                direction, angle = input("Direction and Angle: ").split()
-                node.set_movement(direction=direction, angle=angle)
+                throttle_input, angle = input("Throttle and Angle: ").split()
+                node.set_movement(throttle=throttle_input, angle=angle)
         except KeyboardInterrupt:
             print("\nStopping robot...")
             node.stop()

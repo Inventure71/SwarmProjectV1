@@ -84,12 +84,12 @@ class RobotController:
         if self.server_socket:
             self.server_socket.close()
     
-    def send_command(self, direction, angle):
+    def send_command(self, throttle, angle):
         """
         Send command to robot.
         
         Args:
-            direction: 0 = turn in place, 1 = move forward
+            throttle: forward command ratio in [0, 1]
             angle: turn rate in degrees/second (will be inverted for robot)
         
         Returns:
@@ -99,8 +99,14 @@ class RobotController:
             if not self.connected or not self.client_socket:
                 return False
             try:
+                try:
+                    throttle_val = float(throttle)
+                except (TypeError, ValueError):
+                    throttle_val = 0.0
+                throttle_val = max(-1.0, min(1.0, throttle_val))
+                legacy_direction = 1 if throttle_val > 1e-3 else 0
                 # Invert angle: robot expects positive = left, we use positive = right
-                cmd = {"direction": direction, "angle": -angle}
+                cmd = {"throttle": throttle_val, "direction": legacy_direction, "angle": angle}
                 msg = json.dumps(cmd) + '\n'
                 self.client_socket.sendall(msg.encode('utf-8'))
                 return True
@@ -127,4 +133,3 @@ class RobotController:
                 self.server_socket.close()
             except:
                 pass
-

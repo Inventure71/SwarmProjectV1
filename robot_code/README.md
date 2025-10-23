@@ -7,20 +7,21 @@ This system provides remote robot control via a client-server architecture:
 ### Control Interface
 
 Commands use:
-- **direction**: 0 (stop) or 1 (move forward)
+- **throttle**: -1.0 (full reverse) to 1.0 (full forward)
 - **angle**: turn rate in degrees per second (positive = left, negative = right)
 
 The robot continuously publishes `geometry_msgs/Twist` or `TwistStamped` messages to `/cmd_vel` at 20 Hz.
 
 ### How it Works
 
-- The node class `RobotController` exposes `set_movement(direction, angle)` which maps inputs to internal targets and clamps output by `max_linear` and `max_angular`.
+- The node class `RobotController` exposes `set_movement(throttle, angle)` which maps inputs to internal targets and clamps output by `max_linear` and `max_angular`.
 - A timer publishes the current `Twist` at 20 Hz:
   - `linear.x` = clamped forward speed
   - `angular.z` = clamped yaw rate
-- The helper `calculate_movement(direction, angle)` converts inputs into normalized linear/angular directives:
-  - `direction == 0` → `(0.0, 0.0)` (stop)
-  - `direction == 1` → `(1.0, angle)` (move forward and turn by angle)
+- The helper `calculate_movement(throttle, angle)` converts inputs into normalized linear/angular directives:
+  - `throttle == 0` → `(0.0, 0.0)` (stop)
+  - `throttle > 0` → `(throttle, angle)` (move forward and turn by angle)
+  - `throttle < 0` → `(throttle, angle)` (move backward and turn by angle)
 
 ### Interface
 
@@ -43,7 +44,8 @@ python3 robot/server_barebones.py [port]
 ```
 Simple command-line interface. Enter commands like:
 - `1 0` - Move forward straight
-- `1 60` - Move forward, turn left 60 deg/s
+- `0.6 60` - Move forward at 60%, turn left 60 deg/s
+- `-0.5 0` - Move backward at 50%
 - `0 90` - Stop linear, turn in place 90 deg/s
 - `0 0` - Full stop
 
@@ -90,10 +92,10 @@ rclpy.init()
 node = RobotController(max_linear=0.5, max_angular=1.5, use_stamped=True, frame_id='base_link')
 
 # Move forward with a slight left turn
-node.set_movement(direction=1, angle=0.3)
+node.set_movement(throttle=1.0, angle=0.3)
 
 # ... later, stop
-node.set_movement(direction=0, angle=0.0)
+node.set_movement(throttle=0.0, angle=0.0)
 
 rclpy.spin(node)
 # On shutdown, ensure zero cmd (type depends on use_stamped)
@@ -138,13 +140,13 @@ class SimplePublisher(Node):
 
 **Communication Protocol:**
 - TCP socket connection (default port 5000)
-- JSON messages, newline-delimited: `{"direction": 0/1, "angle": deg_per_sec}\n`
+- JSON messages, newline-delimited: `{"throttle": -1..1, "angle": deg_per_sec, "direction": 0/1}\n`
 - Server broadcasts commands to all connected robot clients
 - Multiple robots can connect to one server
 
 **Special Behaviors:**
-- **Turn in place**: Set `direction=0` with non-zero `angle` to rotate without moving forward
-- **Over-limit turning**: If requested turn rate exceeds `max_angular`, robot stops, performs brief in-place turn burst, then proceeds forward straight
+- **Turn in place**: Set `throttle=0` with non-zero `angle` to rotate without moving forward
+- **Curvature scaling**: Higher requested turn rates automatically reduce forward throttle to preserve turning capability
 - **Auto-stop**: Robots send stop command on disconnect or Ctrl+C
 
 ### Notes
@@ -161,5 +163,3 @@ class SimplePublisher(Node):
 - **Robot doesn't move**: Check that ROS 2 is running, `/cmd_vel` topic exists, and `use_stamped` matches your robot's expectation
 - **Connection refused**: Ensure server is running first and firewall allows port 5000
 - **Laggy control**: Check network latency; UI server updates at 10Hz, increase if needed
-
-
