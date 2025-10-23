@@ -106,7 +106,8 @@ class PathFollower:
                  segment_pass_distance=0.08,
                  segment_pass_lateral_factor=1.5,
                  waypoint_approach_slowdown=0.4,
-                 corner_keep_angle_deg=20.0):
+                 corner_keep_angle_deg=20.0,
+                 intermediate_corner_slowdown_deg=65.0):
         """
         Initialize path follower.
         
@@ -121,6 +122,13 @@ class PathFollower:
             curvature_speed_gain: Gain applied when reducing speed for tighter turns
             min_speed_ratio: Minimum throttle to apply while moving forward
             slow_down_distance: Distance from final waypoint to start slowing down (meters)
+            path_simplification_tolerance: Max deviation when simplifying waypoint path (meters)
+            min_waypoint_separation: Minimum desired distance between processed waypoints (meters)
+            segment_pass_distance: Forward distance before allowing waypoint pass-through (meters)
+            segment_pass_lateral_factor: Lateral tolerance multiplier when declaring a waypoint passed
+            waypoint_approach_slowdown: Distance over which to reduce speed near critical waypoints
+            corner_keep_angle_deg: Preserve corners sharper than this angle during simplification
+            intermediate_corner_slowdown_deg: Apply approach slowdown only if turn exceeds this angle
         """
         self.path_simplification_tolerance = max(0.0, path_simplification_tolerance)
         self.min_waypoint_separation = max(0.0, min_waypoint_separation)
@@ -128,6 +136,7 @@ class PathFollower:
         self.segment_pass_lateral_factor = max(1.0, segment_pass_lateral_factor)
         self.waypoint_approach_slowdown = max(0.0, waypoint_approach_slowdown)
         self.corner_keep_angle_rad = math.radians(max(0.0, corner_keep_angle_deg))
+        self.intermediate_corner_slowdown_rad = math.radians(max(0.0, intermediate_corner_slowdown_deg))
 
         self.raw_waypoints = list(waypoints) if waypoints is not None else []
         self.waypoints = self._process_waypoints(self.raw_waypoints)
@@ -303,13 +312,23 @@ class PathFollower:
                     throttle = 0.0
 
             if throttle > 0.0 and self.waypoint_approach_slowdown > 1e-6:
-                if distance < self.waypoint_approach_slowdown:
-                    distance_scale = max(0.0, min(1.0, distance / self.waypoint_approach_slowdown))
-                    throttle = min(throttle, distance_scale)
-                if distance < self.waypoint_tolerance * 2.0:
-                    denom = max(self.waypoint_tolerance * 2.0, 1e-6)
-                    close_scale = distance / denom
-                    throttle = min(throttle, close_scale)
+                apply_slowdown = False
+                final_waypoint = (self.current_waypoint_index + 1) >= len(self.waypoints)
+                if final_waypoint:
+                    apply_slowdown = True
+                else:
+                    turn_angle = self._segment_turn_angle(self.current_waypoint_index)
+                    if turn_angle >= self.intermediate_corner_slowdown_rad:
+                        apply_slowdown = True
+
+                if apply_slowdown:
+                    if distance < self.waypoint_approach_slowdown:
+                        distance_scale = max(0.0, min(1.0, distance / self.waypoint_approach_slowdown))
+                        throttle = min(throttle, distance_scale)
+                    if distance < self.waypoint_tolerance * 2.0:
+                        denom = max(self.waypoint_tolerance * 2.0, 1e-6)
+                        close_scale = distance / denom
+                        throttle = min(throttle, close_scale)
         
         # Final safety check on turn rate
         if not math.isfinite(turn_rate):
@@ -415,6 +434,19 @@ class PathFollower:
         dot = ax * bx + ay * by
         cos_angle = max(-1.0, min(1.0, dot / (norm_a * norm_b)))
         return math.acos(cos_angle)
+
+    def _segment_turn_angle(self, idx):
+        """Return the interior turn angle at waypoint idx."""
+        if idx <= 0 or idx >= len(self.waypoints) - 1:
+            return 0.0
+
+        prev_pt = self.waypoints[idx - 1]
+        curr_pt = self.waypoints[idx]
+        next_pt = self.waypoints[idx + 1]
+
+        vec_in = (curr_pt[0] - prev_pt[0], curr_pt[1] - prev_pt[1])
+        vec_out = (next_pt[0] - curr_pt[0], next_pt[1] - curr_pt[1])
+        return self._angle_between(vec_in, vec_out)
 
     def _should_advance_waypoint(self, distance, control_x, control_y, robot_x, robot_y):
         """Decide if current waypoint can be considered reached or safely passed."""

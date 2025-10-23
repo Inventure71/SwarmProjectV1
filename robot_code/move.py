@@ -154,6 +154,7 @@ def run_client_mode(host='10.205.3.47', port=6969):
     Commands are JSON: {"throttle": -1..1, "angle": degrees_per_sec}
     Legacy messages using {"direction": 0/1, "angle": ...} are still supported.
     Retries connection indefinitely until successful or keyboard interrupted.
+    Automatically reconnects if connection is lost.
     """
     rclpy.init()
     node = RobotController(max_linear=0.5, max_angular=1.5, use_stamped=True, frame_id='base_link')
@@ -163,74 +164,74 @@ def run_client_mode(host='10.205.3.47', port=6969):
     spinner.start()
     
     sock = None
-    connected = False
     try:
-        while not connected:
-            try:
-                print(f"[CLIENT] Connecting to server at {host}:{port}...")
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.connect((host, port))
-                connected = True
-                print(f"[CLIENT] Connected to {host}:{port}")
-                sock.settimeout(0.1)
-            except KeyboardInterrupt:
-                print("\n[CLIENT] Keyboard interrupt. Exiting connection loop.")
-                node.stop()
-                if sock:
-                    sock.close()
-                if node.use_stamped:
-                    stop = TwistStamped()
-                    stop.header.stamp = node.get_clock().now().to_msg()
-                    stop.header.frame_id = node.frame_id
-                    node.publisher_.publish(stop)
-                else:
-                    stop = Twist()
-                    node.publisher_.publish(stop)
-                rclpy.shutdown()
-                print("[CLIENT] Exiting.")
-                return
-            except Exception as e:
-                print(f"[CLIENT] Connection failed: {e}")
-                if sock:
-                    sock.close()
-                print("[CLIENT] Retrying in 1 second... (Press Ctrl+C to stop)")
-                time.sleep(1.0)
-        
-        buffer = ""
         while rclpy.ok():
+            # Stop robot while disconnected
+            node.stop()
+            
+            # Connection loop
+            connected = False
+            while not connected and rclpy.ok():
+                try:
+                    print(f"[CLIENT] Connecting to server at {host}:{port}...")
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.connect((host, port))
+                    connected = True
+                    print(f"[CLIENT] Connected to {host}:{port}")
+                    sock.settimeout(0.1)
+                except KeyboardInterrupt:
+                    raise  # Re-raise to be caught by outer try-except
+                except Exception as e:
+                    print(f"[CLIENT] Connection failed: {e}")
+                    if sock:
+                        sock.close()
+                        sock = None
+                    print("[CLIENT] Retrying in 1 second... (Press Ctrl+C to stop)")
+                    time.sleep(1.0)
+            
+            if not connected:
+                break  # Exit if not connected and rclpy not ok
+            
+            # Message receiving loop
+            buffer = ""
             try:
-                data = sock.recv(1024)
-                if not data:
-                    print("[CLIENT] Server disconnected")
-                    break
+                while rclpy.ok():
+                    try:
+                        data = sock.recv(1024)
+                        if not data:
+                            print("[CLIENT] Server disconnected, stopping robot and reconnecting...")
+                            node.stop()
+                            break
+                            
+                        buffer += data.decode('utf-8')
+                        # Process complete JSON messages (newline-delimited)
+                        while '\n' in buffer:
+                            line, buffer = buffer.split('\n', 1)
+                            if line.strip():
+                                try:
+                                    cmd = json.loads(line)
+                                    throttle = cmd.get('throttle')
+                                    if throttle is None:
+                                        throttle = cmd.get('direction', 0)
+                                    angle = cmd.get('angle', 0.0)
+                                    node.set_movement(throttle=throttle, angle=angle)
+                                except json.JSONDecodeError as e:
+                                    print(f"[CLIENT] JSON decode error: {e}")
+                    except socket.timeout:
+                        continue
+                    except KeyboardInterrupt:
+                        raise  # Re-raise to be caught by outer try-except
+                    except Exception as e:
+                        print(f"[CLIENT] Connection error: {e}, stopping robot and reconnecting...")
+                        node.stop()
+                        break
+            finally:
+                if sock:
+                    sock.close()
+                    sock = None
                     
-                buffer += data.decode('utf-8')
-                # Process complete JSON messages (newline-delimited)
-                while '\n' in buffer:
-                    line, buffer = buffer.split('\n', 1)
-                    if line.strip():
-                        try:
-                            cmd = json.loads(line)
-                            throttle = cmd.get('throttle')
-                            if throttle is None:
-                                throttle = cmd.get('direction', 0)
-                            angle = cmd.get('angle', 0.0)
-                            node.set_movement(throttle=throttle, angle=angle)
-                        except json.JSONDecodeError as e:
-                            print(f"[CLIENT] JSON decode error: {e}")
-            except socket.timeout:
-                continue
-            except KeyboardInterrupt:
-                print("\n[CLIENT] Stopping...")
-                break
-            except Exception as e:
-                print(f"[CLIENT] Error: {e}")
-                break
-                
     except KeyboardInterrupt:
         print("\n[CLIENT] Stopping...")
-    except Exception as e:
-        print(f"[CLIENT] Connection error: {e}")
     finally:
         node.stop()
         if sock:

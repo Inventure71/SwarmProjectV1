@@ -89,23 +89,23 @@ class RobotControllerApp:
         # Settings
         self.use_prediction = True
         self.estimated_delay_ms = 100
-        
-        # Motion parameters
-        self.waypoint_tolerance = 0.20
-        self.turn_in_place_threshold = 55.0
-        self.proportional_gain = 3.5
-        self.max_turn_rate = 85.0
-        self.slow_down_distance = 0.5
-        self.min_speed_ratio = 0.05
-        self.curvature_speed_gain = 1.2
-        self.look_ahead_distance = 0.4
-        self.path_simplification_tolerance = 0.06
-        self.min_waypoint_separation = 0.15
-        self.segment_pass_distance = 0.09
-        self.segment_pass_lateral_factor = 1.7
-        self.waypoint_approach_slowdown = 0.45
-        self.corner_keep_angle_deg = 22.0
-        self.last_throttle_command = 0.0
+
+        self.waypoint_tolerance = 0.20  # Keep as is
+        self.turn_in_place_threshold = 65.0  # Increased - turns while moving more often
+        self.proportional_gain = 2.8  # Reduced - less jittery
+        self.max_turn_rate = 85.0  # Keep as is
+        self.slow_down_distance = 0.5  # Keep as is
+        self.min_speed_ratio = 0.20  # Increased - higher minimum speed
+        self.curvature_speed_gain = 0.65  # Reduced - maintains speed in turns better
+        self.look_ahead_distance = 0.4  # Keep as is
+        self.path_simplification_tolerance = 0.06  # Keep as is
+        self.min_waypoint_separation = 0.15  # Keep as is
+        self.segment_pass_distance = 0.09  # Keep as is
+        self.segment_pass_lateral_factor = 1.7  # Keep as is
+        self.waypoint_approach_slowdown = 0.30  # Reduced - less aggressive slowdown
+        self.corner_keep_angle_deg = 22.0  # Keep as is
+        self.intermediate_corner_slowdown_deg = 90.0  # Increased - only sharp corners
+        self.throttle_ramp_rate = 0.9  # Reduced - smoother acceleration changes
         
     def _setup_ui(self):
         """Setup the user interface."""
@@ -729,7 +729,8 @@ class RobotControllerApp:
             segment_pass_distance=self.segment_pass_distance,
             segment_pass_lateral_factor=self.segment_pass_lateral_factor,
             waypoint_approach_slowdown=self.waypoint_approach_slowdown,
-            corner_keep_angle_deg=self.corner_keep_angle_deg
+            corner_keep_angle_deg=self.corner_keep_angle_deg,
+            intermediate_corner_slowdown_deg=self.intermediate_corner_slowdown_deg
         )
         
         self.is_animating = True
@@ -739,6 +740,7 @@ class RobotControllerApp:
         self.stop_btn.config(state=tk.NORMAL)
         self.clear_btn.config(state=tk.DISABLED)
         self.cmd_label.config(text="▶ Following Path...", fg='#00ff88')
+        self.last_throttle_command = 0.0
         
         self._control_loop()
     
@@ -768,7 +770,7 @@ class RobotControllerApp:
         
         state = self.follower.get_state()
         distance_to_waypoint = state['distance_to_target'] if state['distance_to_target'] is not None else 999
-        
+
         # Apply look-ahead blending
         if throttle > 0.01 and distance_to_waypoint < self.look_ahead_distance:
             current_idx = state['waypoint_index']
@@ -805,7 +807,15 @@ class RobotControllerApp:
                         else:
                             throttle = min(throttle, max(self.min_speed_ratio, min(1.0, curvature_scale)))
                     throttle = max(0.0, min(1.0, throttle))
-        
+
+        if self.throttle_ramp_rate > 1e-6:
+            max_delta = self.throttle_ramp_rate * control_dt
+            delta = throttle - self.last_throttle_command
+            if delta > max_delta:
+                throttle = self.last_throttle_command + max_delta
+            elif delta < -max_delta:
+                throttle = self.last_throttle_command - max_delta
+
         self.last_throttle_command = throttle
         self.controller.send_command(throttle, -turn_rate)
         
@@ -830,6 +840,7 @@ class RobotControllerApp:
         self.stop_btn.config(state=tk.DISABLED)
         self.clear_btn.config(state=tk.NORMAL)
         self.cmd_label.config(text="⏸ Stopped", fg='#ffaa00')
+        self.last_throttle_command = 0.0
     
     def _emergency(self):
         """Emergency stop."""
@@ -845,6 +856,7 @@ class RobotControllerApp:
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
         self.cmd_label.config(text="🛑 EMERGENCY", fg='#f44336')
+        self.last_throttle_command = 0.0
     
     def _on_delay_change(self, value):
         """Handle delay change."""
