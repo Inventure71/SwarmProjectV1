@@ -387,7 +387,7 @@ class AdvancedTrackingServer:
         # Command display
         self.cmd_display = tk.Label(
             right_panel,
-            text="Command: direction=0, angle=0.0°/s",
+            text="Command: throttle=0.00, angle=0.0°/s",
             font=('Arial', 11, 'bold'),
             bg='#1e1e1e',
             fg='#FFA500'
@@ -456,20 +456,22 @@ class AdvancedTrackingServer:
         # Get joystick position
         joy_x, joy_y = self.joystick.get_position()
         
-        # Compute command
-        if speed > 0.01 and joy_y > 0.1:
-            direction = 1
+        # Compute throttle command
+        slider_ratio = speed / self.max_speed if self.max_speed > 1e-6 else 0.0
+        if abs(joy_y) > 0.1:
+            throttle = slider_ratio * joy_y
         else:
-            direction = 0
+            throttle = 0.0
+        throttle = max(-1.0, min(1.0, throttle))
         
         # Invert X so positive joystick = turn right, negative = turn left
         angle = -joy_x * self.max_angle
         
         # Update command display
-        self.cmd_display.config(text=f"Command: direction={direction}, angle={angle:.1f}°/s")
+        self.cmd_display.config(text=f"Command: throttle={throttle:.2f}, angle={angle:.1f}°/s")
         
         # Broadcast command
-        self.broadcast_command(direction, angle)
+        self.broadcast_command(throttle, angle)
         
         # Update status
         with self.clients_lock:
@@ -484,12 +486,18 @@ class AdvancedTrackingServer:
     def _emergency_stop(self):
         """Emergency stop."""
         self.speed_var.set(0.0)
-        self.broadcast_command(0, 0.0)
+        self.broadcast_command(0.0, 0.0)
         print("[Server] EMERGENCY STOP")
     
-    def broadcast_command(self, direction, angle):
+    def broadcast_command(self, throttle, angle):
         """Broadcast command to all clients."""
-        cmd = {"direction": direction, "angle": angle}
+        try:
+            throttle_val = float(throttle)
+        except (TypeError, ValueError):
+            throttle_val = 0.0
+        throttle_val = max(-1.0, min(1.0, throttle_val))
+        legacy_direction = 1 if throttle_val > 1e-3 else 0
+        cmd = {"throttle": throttle_val, "direction": legacy_direction, "angle": angle}
         msg = json.dumps(cmd) + '\n'
         
         with self.clients_lock:
@@ -603,4 +611,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

@@ -80,7 +80,7 @@ class VirtualJoystick(tk.Canvas):
         """Handle mouse release - return to center."""
         self.dragging = False
         self.joystick_x = 0.0
-        self.joystick_y = 0.0
+        #self.joystick_y = 0.0
         self._update_visual()
     
     def _update_position(self, x, y):
@@ -117,10 +117,10 @@ class VirtualJoystick(tk.Canvas):
         
         Returns:
             (x, y) tuple where both are in range [-1.0, 1.0]
-            x: left/right (-1 = left, 1 = right)
+            x: left/right (-1 = left, 1 = right) - INVERTED for robot control
             y: forward/back (-1 = back, 1 = forward)
         """
-        return (self.joystick_x, self.joystick_y)
+        return (-self.joystick_x, self.joystick_y)
     
     def reset(self):
         """Reset joystick to center."""

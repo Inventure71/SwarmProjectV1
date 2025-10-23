@@ -4,6 +4,7 @@ import threading
 import time
 import sys
 from pathlib import Path
+import math
 
 # Add the parent directory to the path to allow importing modules
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -37,10 +38,15 @@ class RobotTracker:
         self._threads = []
 
         # OptiTrack calibration parameters
-        self.x_offset = -250  # -180
-        self.y_offset = -200  # -200
-        self.scale_factor = 1/40
-        self.orientation_offset = 55.5
+        self.x_offset = -250  # millimetres
+        self.y_offset = -200  # millimetres
+        self.scale_factor = 1 / 40.0  # mm -> m
+        self.flip_x = True
+        self.flip_y = False
+        self.invert_yaw = False
+        self.yaw_offset = 180
+        self.frame_rotation_deg = 0
+        self.frame_rotation_rad = math.radians(self.frame_rotation_deg)
 
     def _listener_thread(self, robot_name: str, port: int, host: str = "0.0.0.0"):
         """
@@ -81,17 +87,40 @@ class RobotTracker:
                     x_raw, y_raw, z_raw, yaw_raw = map(float, msg.split(','))
                     
                     # Apply transformations
+                    # Convert to metres
                     x = (x_raw + self.x_offset) * self.scale_factor
                     y = (y_raw + self.y_offset) * self.scale_factor
-                    yaw = yaw_raw + self.orientation_offset
+                    yaw = yaw_raw + self.yaw_offset # radians from OptiTrack
+
+                    # Reflections invert orientation
+                    if self.flip_x:
+                        x = -x
+                        yaw = math.pi - yaw
+                    if self.flip_y:
+                        y = -y
+                        yaw = -yaw
+
+                    if self.invert_yaw:
+                        yaw = -yaw
+
+                    # Rotate coordinate frame to align with UI axes
+                    if abs(self.frame_rotation_rad) > 1e-9:
+                        cos_r = math.cos(self.frame_rotation_rad)
+                        sin_r = math.sin(self.frame_rotation_rad)
+                        x_rot = x * cos_r - y * sin_r
+                        y_rot = x * sin_r + y * cos_r
+                        x, y = x_rot, y_rot
+                        yaw += self.frame_rotation_rad
+
+                    # Normalise yaw to [-pi, pi]
+                    yaw = (yaw + math.pi) % (2 * math.pi) - math.pi
                     
-                    # Update robot position
                     robot.update_position(x, y, yaw)
                     
                     # Report every 2 seconds
                     now = time.time()
                     if now - last_report >= 2.0:
-                        print(f"[Tracker: {robot_name}] 📍 Packets: {packet_count}, Current pos: x={x:.3f}, y={y:.3f}, yaw={yaw:.2f}°")
+                        print(f"[Tracker: {robot_name}] 📍 Packets: {packet_count}, Current pos: x={x:.3f}, y={y:.3f}, yaw={math.degrees(yaw):.2f}°")
                         last_report = now
 
                 except socket.timeout:

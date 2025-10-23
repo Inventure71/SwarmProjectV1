@@ -83,8 +83,8 @@ class PathFollower:
         robot_x, robot_y, robot_yaw = get_robot_position()
         follower.update_position(robot_x, robot_y, robot_yaw)
         
-        direction, turn_rate = follower.compute_command()
-        send_command_to_robot(direction, turn_rate)
+        throttle, turn_rate = follower.compute_command()
+        send_command_to_robot(throttle, turn_rate)
         
         if follower.is_complete():
             stop_robot()
@@ -97,7 +97,10 @@ class PathFollower:
                  proportional_gain=3.0,
                  max_turn_rate=86.0,
                  use_prediction=True,
-                 estimated_delay_ms=100):
+                 estimated_delay_ms=100,
+                 curvature_speed_gain=1.2,
+                 min_speed_ratio=0.05,
+                 slow_down_distance=0.5):
         """
         Initialize path follower.
         
@@ -109,6 +112,9 @@ class PathFollower:
             max_turn_rate: Maximum turn rate (degrees/second)
             use_prediction: Enable position prediction
             estimated_delay_ms: Estimated tracking delay (milliseconds)
+            curvature_speed_gain: Gain applied when reducing speed for tighter turns
+            min_speed_ratio: Minimum throttle to apply while moving forward
+            slow_down_distance: Distance from final waypoint to start slowing down (meters)
         """
         self.waypoints = waypoints if waypoints is not None else []
         self.waypoint_tolerance = waypoint_tolerance
@@ -117,6 +123,11 @@ class PathFollower:
         self.max_turn_rate = max_turn_rate
         self.use_prediction = use_prediction
         self.estimated_delay_ms = estimated_delay_ms
+        self.curvature_speed_gain = curvature_speed_gain
+        self.min_speed_ratio = min_speed_ratio
+        self.slow_down_distance = slow_down_distance
+        self.soft_turn_stop_ratio = 0.6
+        self.soft_turn_stop_distance = max(0.3, self.waypoint_tolerance * 2.0)
         
         self.current_waypoint_index = 0
         self.current_position = None
@@ -176,22 +187,22 @@ class PathFollower:
         Compute movement command based on current position and target.
         
         Returns:
-            (direction, turn_rate) tuple:
-                - direction: 0 = turn in place, 1 = move forward
+            (throttle, turn_rate) tuple:
+                - throttle: forward command ratio in [0, 1]
                 - turn_rate: degrees/second (positive = right, negative = left)
                 Note: This is inverted when sending to robot (robot expects positive = left)
             
-            Returns (0, 0.0) if path is complete or no position update yet.
+            Returns (0.0, 0.0) if path is complete or no position update yet.
         """
         if self.current_position is None:
-            return 0, 0.0
+            return 0.0, 0.0
             
         if self.is_complete():
-            return 0, 0.0
+            return 0.0, 0.0
         
         target = self.get_current_target()
         if target is None:
-            return 0, 0.0
+            return 0.0, 0.0
         
         target_x, target_y = target
         robot_x, robot_y, robot_yaw = self.current_position
@@ -217,14 +228,14 @@ class PathFollower:
             if self.current_waypoint_index < len(self.waypoints):
                 return self.compute_command()  # Immediately target next waypoint
             else:
-                return 0, 0.0  # Path complete
+                return 0.0, 0.0  # Path complete
         
         # Calculate desired heading
         desired_yaw = math.atan2(dy, dx)
         
         # Safety check for invalid angle
         if not math.isfinite(desired_yaw):
-            return 0, 0.0
+            return 0.0, 0.0
         
         # Calculate angle difference
         angle_diff = desired_yaw - control_yaw
@@ -238,25 +249,50 @@ class PathFollower:
         
         # Safety check for invalid angle difference
         if not math.isfinite(angle_diff_deg):
-            return 0, 0.0
+            return 0.0, 0.0
         
-        # Determine direction and turn rate
+        # Determine throttle and turn rate
         if abs(angle_diff_deg) > self.turn_in_place_threshold:
             # Turn in place
-            direction = 0
+            throttle = 0.0
             turn_rate = max(-self.max_turn_rate, 
                           min(self.max_turn_rate, angle_diff_deg * 2))
         else:
             # Move forward with turning
-            direction = 1
             turn_rate = max(-self.max_turn_rate,
                           min(self.max_turn_rate, angle_diff_deg * self.proportional_gain))
+            turn_ratio = abs(turn_rate) / self.max_turn_rate if self.max_turn_rate > 0 else 0.0
+            curvature_scale = 1.0 / (1.0 + self.curvature_speed_gain * turn_ratio)
+            if curvature_scale <= self.min_speed_ratio:
+                throttle = 0.0
+            else:
+                throttle = max(self.min_speed_ratio, min(1.0, curvature_scale))
+            
+            # Apply distance-based throttle reduction near final waypoint
+            if self.current_waypoint_index + 1 >= len(self.waypoints) and self.slow_down_distance > 1e-6 and distance < self.slow_down_distance:
+                distance_scale = self.min_speed_ratio + \
+                                 (1.0 - self.min_speed_ratio) * \
+                                 (distance / self.slow_down_distance)
+                distance_scale = max(0.0, min(1.0, distance_scale))
+                throttle = min(throttle, distance_scale)
+                if throttle < self.min_speed_ratio:
+                    throttle = 0.0
+            
+            if throttle > 0.0:
+                high_angle = abs(angle_diff_deg) > self.turn_in_place_threshold * self.soft_turn_stop_ratio
+                if high_angle and distance < self.soft_turn_stop_distance:
+                    throttle = 0.0
         
         # Final safety check on turn rate
         if not math.isfinite(turn_rate):
             turn_rate = 0.0
         
-        return direction, turn_rate
+        # Clamp throttle
+        if not math.isfinite(throttle):
+            throttle = 0.0
+        throttle = max(0.0, min(1.0, throttle))
+        
+        return throttle, turn_rate
     
     def get_state(self):
         """
@@ -339,10 +375,10 @@ def example_usage():
         follower.update_position(robot_x, robot_y, robot_yaw)
         
         # Compute command
-        direction, turn_rate = follower.compute_command()
+        throttle, turn_rate = follower.compute_command()
         
         # Send to robot
-        send_command(direction, turn_rate)  # Your function
+        send_command(throttle, turn_rate)  # Your function
         
         # Optional: Monitor state
         state = follower.get_state()
@@ -352,11 +388,10 @@ def example_usage():
         time.sleep(0.1)  # 10Hz control loop
     
     # Stop robot when complete
-    send_command(0, 0.0)
+    send_command(0.0, 0.0)
     print("Path complete!")
 
 
 if __name__ == '__main__':
     print("PathFollower module - Import and use in your control system")
     print("See example_usage() for integration guide")
-

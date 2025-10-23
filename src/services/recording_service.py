@@ -12,9 +12,10 @@ from typing import List, Tuple, Optional, Callable
 class RecordingService:
     """Service for recording robot motion via joystick control."""
     
-    def __init__(self, robot_controller, robot_tracker, canvas, world_to_canvas_func):
+    def __init__(self, robot_controller, robot_tracker, robot, canvas, world_to_canvas_func):
         self.robot_controller = robot_controller
         self.robot_tracker = robot_tracker
+        self.robot = robot
         self.canvas = canvas
         self.world_to_canvas = world_to_canvas_func
         
@@ -35,13 +36,12 @@ class RecordingService:
     
     def start_recording(self):
         """Start recording robot motion."""
-        if not self.robot_tracker.tracking_active or not self.robot_controller.connected:
+        if not self.robot_controller.connected or self.robot is None:
             return False
         
         self.is_recording = True
         self.recorded_positions = []
         self.last_recorded_position = None
-        self.joystick_control_active = True
         
         if self.on_recording_start:
             self.on_recording_start()
@@ -51,11 +51,10 @@ class RecordingService:
     def stop_recording(self):
         """Stop recording and return recorded positions."""
         self.is_recording = False
-        self.joystick_control_active = False
         
         # Stop robot
         if self.robot_controller.connected:
-            self.robot_controller.send_command(0, 0.0)
+            self.robot_controller.send_command(0.0, 0.0)
         
         if self.on_recording_stop:
             self.on_recording_stop()
@@ -71,29 +70,27 @@ class RecordingService:
         # joy_y: forward/backward (-1 to 1)
         # joy_x: left/right turn (-1 to 1)
         
-        # Determine direction (1 if moving forward, 0 if stopped)
-        direction = 1 if abs(joy_y) > 0.1 else 0
+        # Determine throttle (-1..1) based on joystick input
+        throttle = joy_y if abs(joy_y) > 0.1 else 0.0
+        throttle = max(-1.0, min(1.0, throttle))
         
         # Calculate turn rate (degrees per second)
         turn_rate = joy_x * self.max_turn_rate
         
         # Apply forward/backward speed modulation
-        if joy_y < -0.1:  # Backward
-            direction = 1  # Still use forward command but modulated
-        
         # Send command to robot
         if self.robot_controller.connected:
-            self.robot_controller.send_command(direction, turn_rate)
+            self.robot_controller.send_command(throttle, turn_rate)
         
         # Record position if moved enough
         self._record_position_if_needed(joy_x, joy_y)
     
     def _record_position_if_needed(self, joy_x: float, joy_y: float):
         """Record robot position if it has moved enough."""
-        if not self.robot_tracker.tracking_active:
+        if not self.is_recording or self.robot is None:
             return
         
-        x, y, yaw = self.robot_tracker.robot.get_position()
+        x, y, yaw = self.robot.get_position()
         
         # Check if we should record this position
         should_record = False
@@ -139,3 +136,9 @@ class RecordingService:
         """Set the maximum turn rate for joystick control."""
         self.max_turn_rate = rate
 
+    def set_joystick_enabled(self, enabled: bool):
+        """Enable or disable joystick control."""
+        enable_flag = bool(enabled)
+        if not enable_flag and self.joystick_control_active and self.robot_controller.connected:
+            self.robot_controller.send_command(0.0, 0.0)
+        self.joystick_control_active = enable_flag

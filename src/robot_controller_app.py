@@ -40,7 +40,7 @@ class RobotControllerApp:
         # UI dimensions will be calculated dynamically
         self.canvas_width = 1200  # Initial width
         self.canvas_height = 675  # 16:9 ratio
-        self.scale = 100  # Will be adjusted based on canvas size
+        self.scale = 50  # Will be adjusted based on canvas size
         
         # State
         self.is_animating = False
@@ -92,14 +92,14 @@ class RobotControllerApp:
         
         # Motion parameters
         self.waypoint_tolerance = 0.20
-        self.turn_in_place_threshold = 80.0
+        self.turn_in_place_threshold = 55.0
         self.proportional_gain = 3.5
         self.max_turn_rate = 85.0
         self.slow_down_distance = 0.5
-        self.min_speed_ratio = 0.4
+        self.min_speed_ratio = 0.05
+        self.curvature_speed_gain = 1.2
         self.look_ahead_distance = 0.4
-        self.last_direction_command = 1
-        self.move_counter = 0
+        self.last_throttle_command = 0.0
         
     def _setup_ui(self):
         """Setup the user interface."""
@@ -369,13 +369,14 @@ class RobotControllerApp:
         
         # Recording service
         self.recording_service = RecordingService(
-            self.controller, self.tracker, self.canvas, self._world_to_canvas
+            self.controller, self.tracker, self.robot, self.canvas, self._world_to_canvas
         )
         
         # Set up recording callbacks
         self.recording_service.on_recording_start = self._on_recording_start
         self.recording_service.on_recording_stop = self._on_recording_stop
         self.recording_service.on_position_recorded = self._on_position_recorded
+        self.recording_service.set_joystick_enabled(False)
         
     # Coordinate conversion methods
     def _world_to_canvas(self, x_m, y_m):
@@ -420,6 +421,7 @@ class RobotControllerApp:
             self.joystick_container.pack_forget()
             # Trigger resize to reclaim joystick space
             self.root.event_generate('<Configure>')
+            self.recording_service.set_joystick_enabled(False)
             
         elif mode == self.MODE_DRAW:
             self.cmd_label.config(text="✏️ Draw mode: Drag to draw path", fg='#00aaff')
@@ -427,6 +429,7 @@ class RobotControllerApp:
             self.joystick_container.pack_forget()
             # Trigger resize to reclaim joystick space
             self.root.event_generate('<Configure>')
+            self.recording_service.set_joystick_enabled(False)
             
         elif mode == self.MODE_RECORD:
             self.cmd_label.config(text="🎮 Record mode: Use joystick to control robot", fg='#ff6600')
@@ -437,6 +440,7 @@ class RobotControllerApp:
             self.root.update()  # Force UI refresh
             # Trigger resize to account for joystick space
             self.root.event_generate('<Configure>')
+            self.recording_service.set_joystick_enabled(True)
     
     # Canvas interaction
     def _on_canvas_click(self, event):
@@ -571,7 +575,7 @@ class RobotControllerApp:
         if self.is_animating:
             self.is_animating = False
             if self.controller.connected:
-                self.controller.send_command(0, 0.0)
+                self.controller.send_command(0.0, 0.0)
             if self.follower:
                 self.follower.reset()
             self.stop_btn.config(state=tk.DISABLED)
@@ -644,8 +648,8 @@ class RobotControllerApp:
         self.info_label.config(text=f"Pos: ({x:6.3f}, {y:6.3f})m | Heading: {yaw_deg:6.1f}°")
         self.debug_label.config(text=self._get_debug_info())
         
-        # Process joystick input if recording
-        if self.recording_service.is_recording:
+        # Process joystick input when joystick control is enabled
+        if self.recording_service.joystick_control_active:
             joy_x, joy_y = self.joystick.get_values()
             self.recording_service.process_joystick_input(joy_x, joy_y)
         
@@ -710,12 +714,14 @@ class RobotControllerApp:
             proportional_gain=self.proportional_gain,
             max_turn_rate=self.max_turn_rate,
             use_prediction=self.use_prediction,
-            estimated_delay_ms=self.estimated_delay_ms
+            estimated_delay_ms=self.estimated_delay_ms,
+            curvature_speed_gain=self.curvature_speed_gain,
+            min_speed_ratio=self.min_speed_ratio,
+            slow_down_distance=self.slow_down_distance
         )
         
         self.is_animating = True
         self.last_control_time = time.time()
-        self.move_counter = 0
         
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
@@ -741,21 +747,20 @@ class RobotControllerApp:
         if self.follower.is_complete():
             self._stop()
             self.cmd_label.config(text="✓ Path Complete!", fg='#00ff88')
-            self.controller.send_command(0, 0.0)
+            self.controller.send_command(0.0, 0.0)
             return
         
         x, y, yaw = self.robot.get_position()
         self.follower.update_position(x, y, yaw)
-        direction, turn_rate = self.follower.compute_command()
+        throttle, turn_rate = self.follower.compute_command()
         
         state = self.follower.get_state()
         distance_to_waypoint = state['distance_to_target'] if state['distance_to_target'] is not None else 999
         
         # Apply look-ahead blending
-        if direction == 1 and distance_to_waypoint < self.look_ahead_distance:
+        if throttle > 0.01 and distance_to_waypoint < self.look_ahead_distance:
             current_idx = state['waypoint_index']
             if current_idx + 1 < state['total_waypoints']:
-                current_target = state['target']
                 next_target = self.follower.waypoints[current_idx + 1]
                 
                 dx_next = next_target[0] - x
@@ -776,38 +781,25 @@ class RobotControllerApp:
                 if angle_diff_current is not None:
                     angle_diff_current_deg = math.degrees(angle_diff_current)
                     blended_angle_diff = (1.0 - blend_ratio) * angle_diff_current_deg + \
-                                        blend_ratio * angle_diff_next_deg
+                                         blend_ratio * angle_diff_next_deg
                     turn_rate = max(-self.max_turn_rate,
-                                  min(self.max_turn_rate, 
-                                      blended_angle_diff * self.proportional_gain))
+                                    min(self.max_turn_rate, 
+                                        blended_angle_diff * self.proportional_gain))
+                    if throttle > 0.0 and self.max_turn_rate > 0:
+                        curvature_ratio = abs(turn_rate) / self.max_turn_rate
+                        curvature_scale = 1.0 / (1.0 + self.curvature_speed_gain * curvature_ratio)
+                        if curvature_scale <= self.min_speed_ratio:
+                            throttle = 0.0
+                        else:
+                            throttle = min(throttle, max(self.min_speed_ratio, min(1.0, curvature_scale)))
+                    throttle = max(0.0, min(1.0, throttle))
         
-        # Apply distance-based speed control
-        final_direction = direction
-        if direction == 1:
-            is_last_waypoint = (state['waypoint_index'] + 1 >= state['total_waypoints'])
-            
-            if is_last_waypoint and distance_to_waypoint < self.slow_down_distance:
-                speed_ratio = self.min_speed_ratio + \
-                             (1.0 - self.min_speed_ratio) * \
-                             (distance_to_waypoint / self.slow_down_distance)
-                speed_ratio = max(self.min_speed_ratio, min(1.0, speed_ratio))
-                
-                self.move_counter += 1
-                cycle_length = 10
-                move_cycles = int(cycle_length * speed_ratio)
-                
-                if (self.move_counter % cycle_length) >= move_cycles:
-                    final_direction = 0
-                    if direction == 1:
-                        turn_rate = turn_rate
-            else:
-                self.move_counter = 0
-        
-        self.controller.send_command(final_direction, -turn_rate)
+        self.last_throttle_command = throttle
+        self.controller.send_command(throttle, -turn_rate)
         
         self.cmd_label.config(
             text=f"Waypoint {state['waypoint_index']+1}/{state['total_waypoints']} | "
-                 f"Dist: {distance_to_waypoint:.2f}m"
+                 f"Dist: {distance_to_waypoint:.2f}m | Throttle: {throttle:.2f}"
         )
         
         self.root.after(10, self._control_loop)
@@ -817,7 +809,7 @@ class RobotControllerApp:
         self.is_animating = False
         
         if self.controller.connected:
-            self.controller.send_command(0, 0.0)
+            self.controller.send_command(0.0, 0.0)
         
         if self.follower:
             self.follower.reset()
@@ -832,7 +824,7 @@ class RobotControllerApp:
         self.is_animating = False
         
         if self.controller.connected:
-            self.controller.send_command(0, 0.0)
+            self.controller.send_command(0.0, 0.0)
             print("[Controller] EMERGENCY STOP")
         
         if self.follower:
@@ -943,7 +935,7 @@ class RobotControllerApp:
             self.recording_service.stop_recording()
         
         if self.controller.connected:
-            self.controller.send_command(0, 0.0)
+            self.controller.send_command(0.0, 0.0)
         
         self.controller.shutdown()
         

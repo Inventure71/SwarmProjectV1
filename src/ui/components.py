@@ -12,53 +12,64 @@ class ModernButton(tk.Button):
     """Modern styled button component with proper dark mode support."""
     
     def __init__(self, parent, text, command=None, style="primary", **kwargs):
-        # Define color schemes optimized for dark mode
-        styles = {
+        self._styles = {
             "primary": {
-                "bg": "#2196F3", "fg": "#000000",  # Black text on blue
+                "bg": "#2196F3", "fg": "#000000",
                 "activebackground": "#1976D2", "activeforeground": "#000000",
-                "disabledforeground": "#555555"  # Dark gray when disabled
+                "disabledforeground": "#555555"
             },
             "success": {
-                "bg": "#4CAF50", "fg": "#000000",  # Black text on green
+                "bg": "#4CAF50", "fg": "#000000",
                 "activebackground": "#388E3C", "activeforeground": "#000000",
                 "disabledforeground": "#555555"
             },
             "warning": {
-                "bg": "#FFA500", "fg": "#000000",  # Black text on orange
+                "bg": "#FFA500", "fg": "#000000",
                 "activebackground": "#F57C00", "activeforeground": "#000000",
                 "disabledforeground": "#666666"
             },
             "danger": {
-                "bg": "#f44336", "fg": "#000000",  # Black text on red
+                "bg": "#f44336", "fg": "#000000",
                 "activebackground": "#D32F2F", "activeforeground": "#000000",
                 "disabledforeground": "#555555"
             },
             "secondary": {
-                "bg": "#555555", "fg": "#000000",  # Black text on dark gray
+                "bg": "#555555", "fg": "#000000",
                 "activebackground": "#666666", "activeforeground": "#000000",
                 "disabledforeground": "#333333"
             }
         }
-        
-        style_config = styles.get(style, styles["secondary"])
-        
-        # Don't override fg if it's passed in kwargs
-        if 'fg' not in kwargs and 'foreground' not in kwargs:
-            style_config.update(kwargs)
-        else:
-            # If fg is passed, use it but keep other style properties
-            temp_fg = kwargs.pop('fg', None) or kwargs.pop('foreground', None)
-            style_config.update(kwargs)
-            if temp_fg:
-                style_config['fg'] = temp_fg
+        self._current_style = style if style in self._styles else "secondary"
+        style_config = dict(self._styles[self._current_style])
+        style_config.update(kwargs)
         
         super().__init__(
             parent, text=text, command=command,
             font=('Arial', 10, 'bold'), relief=tk.FLAT,
-            cursor='hand2', borderwidth=0, 
+            cursor='hand2', borderwidth=0,
             highlightthickness=0, **style_config
         )
+
+    def set_style(self, style):
+        """Apply one of the predefined styles dynamically."""
+        if style not in self._styles:
+            style = "secondary"
+        self._current_style = style
+        style_config = self._styles[style]
+        super().configure(**style_config)
+
+    def configure(self, cnf=None, **kwargs):
+        style = None
+        if cnf and isinstance(cnf, dict) and 'style' in cnf:
+            style = cnf.pop('style')
+        if 'style' in kwargs:
+            style = kwargs.pop('style')
+        result = super().configure(cnf, **kwargs)
+        if style is not None:
+            self.set_style(style)
+        return result
+
+    config = configure
 
 
 class StatusLabel(tk.Label):
