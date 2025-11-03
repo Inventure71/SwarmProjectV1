@@ -21,15 +21,15 @@ class RobotTracker:
         
         Args:
             robot_config_mapping: A dictionary mapping a robot's name/ID to its config dict.
-                                 Each config dict should have 'ip' and 'port' keys.
-                                 Example: {'umh_2': {'ip': '192.168.1.2', 'port': 9876}}
+                                 Each config dict should have 'ip', 'port', and optionally 'type' keys.
+                                 Example: {'umh_2': {'ip': '192.168.1.2', 'port': 9876, 'type': 'real'}}
         """
         self.robot_config_mapping = robot_config_mapping
         self.robots = {
             name: create_robot(
-                robot_type="real", 
-                robot_ip=config['ip'],
-                robot_port=config['port'],
+                robot_type=config.get('type', 'real'), 
+                robot_ip=config.get('ip', ''),
+                robot_port=config.get('port'),
                 username=name
             ) 
             for name, config in robot_config_mapping.items()
@@ -133,19 +133,27 @@ class RobotTracker:
 
     def start(self):
         """
-        Starts the tracking threads for all robots.
+        Starts the tracking threads for all robots (only real robots).
         """
         if self._threads:
-            print("Tracker is already running.")
+            print("[Tracker] ⚠️ Tracker is already running.")
             return
 
-        print("Starting real-time robot trackers...")
+        print("[Tracker] 🚀 Starting real-time robot trackers...")
         self._should_exit.clear()
         for name, config in self.robot_config_mapping.items():
-            port = config['port']
-            thread = threading.Thread(target=self._listener_thread, args=(name, port), daemon=True)
-            self._threads.append(thread)
-            thread.start()
+            robot_type = config.get('type', 'real')
+            robot_port = config.get('port')
+            if robot_type == 'real':
+                if robot_port is None:
+                    print(f"[Tracker: {name}] ❌ ERROR: No port configured for real robot")
+                    continue
+                print(f"[Tracker: {name}] 🎯 Starting UDP listener on port {robot_port}")
+                thread = threading.Thread(target=self._listener_thread, args=(name, robot_port), daemon=True)
+                self._threads.append(thread)
+                thread.start()
+            else:
+                print(f"[Tracker: {name}] ⏭️ Skipping tracker for dummy robot")
 
     def stop(self):
         """

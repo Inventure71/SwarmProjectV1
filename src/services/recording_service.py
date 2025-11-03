@@ -52,9 +52,8 @@ class RecordingService:
         """Stop recording and return recorded positions."""
         self.is_recording = False
         
-        # Stop robot
         if self.robot_controller.connected:
-            self.robot_controller.send_command(0.0, 0.0)
+            self.robot_controller.send_command(0.0, 0.0, self.robot.username)
         
         if self.on_recording_stop:
             self.on_recording_stop()
@@ -77,12 +76,9 @@ class RecordingService:
         # Calculate turn rate (degrees per second)
         turn_rate = joy_x * self.max_turn_rate
         
-        # Apply forward/backward speed modulation
-        # Send command to robot
         if self.robot_controller.connected:
-            self.robot_controller.send_command(throttle, turn_rate)
+            self.robot_controller.send_command(throttle, turn_rate, self.robot.username)
         
-        # Record position if moved enough
         self._record_position_if_needed(joy_x, joy_y)
     
     def _record_position_if_needed(self, joy_x: float, joy_y: float):

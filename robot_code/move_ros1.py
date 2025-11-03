@@ -1,4 +1,5 @@
-# Simple ROS 2 robot movement controller for cmd_vel
+#!/usr/bin/env python3
+# Simple ROS 1 robot movement controller for cmd_vel
 # - Uses throttle value (-1.0 to 1.0) and angle for movement
 # - Turn while moving (linear.x + angular.z) without resorting to stop-and-turn
 #
@@ -8,16 +9,15 @@
 #   max_linear: maximum linear speed (m/s)
 #   max_angular: maximum angular speed (rad/s)
 
-import rclpy
-from rclpy.node import Node
+import rospy
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import TwistStamped
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 import time
 import threading
 import socket
 import json
 import sys
+import os
 
 def calculate_movement(throttle, angle):
     """
@@ -36,20 +36,16 @@ def calculate_movement(throttle, angle):
     angular_vel = angle
     return (linear_vel, angular_vel)
 
-class RobotController(Node):
-    def __init__(self, max_linear=0.5, max_angular=1.5, use_stamped=True, frame_id='base_link'):
-        super().__init__('robot_controller')
+class RobotController:
+    def __init__(self, max_linear=0.5, max_angular=1.5, use_stamped=False, frame_id='base_link', topic='/cmd_vel'):
         self.use_stamped = use_stamped
         self.frame_id = frame_id
-        qos = QoSProfile(
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
+        self.topic = topic
+        
         if self.use_stamped:
-            self.publisher_ = self.create_publisher(TwistStamped, '/cmd_vel', qos)
+            self.publisher_ = rospy.Publisher(self.topic, TwistStamped, queue_size=10)
         else:
-            self.publisher_ = self.create_publisher(Twist, '/cmd_vel', qos)
+            self.publisher_ = rospy.Publisher(self.topic, Twist, queue_size=10)
 
         # Tunables
         self.max_lin = max_linear   # m/s
@@ -58,14 +54,32 @@ class RobotController(Node):
         self.ang = 0.0
 
         self.rate_hz = 20.0
-        self.timer = self.create_timer(1.0 / self.rate_hz, self._on_timer)
-        self.get_logger().info("Robot controller started.")
+        self.rate = rospy.Rate(self.rate_hz)
+        self.timer_thread = None
+        self.running = True
+        rospy.loginfo("Robot controller started.")
+
+    def start_timer(self):
+        """Start the timer thread for continuous publishing."""
+        self.running = True
+        self.timer_thread = threading.Thread(target=self._timer_loop, daemon=True)
+        self.timer_thread.start()
+
+    def _timer_loop(self):
+        """Timer loop that publishes continuously."""
+        rate = rospy.Rate(self.rate_hz)
+        while self.running and not rospy.is_shutdown():
+            self._on_timer()
+            try:
+                rate.sleep()
+            except rospy.ROSInterruptException:
+                break
 
     def _on_timer(self):
         # Publish current twist continuously
         if self.use_stamped:
             msg = TwistStamped()
-            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.stamp = rospy.Time.now()
             msg.header.frame_id = self.frame_id
             msg.twist.linear.x = max(-self.max_lin, min(self.max_lin, self.lin))
             msg.twist.angular.z = max(-self.max_ang, min(self.max_ang, self.ang))
@@ -126,7 +140,7 @@ class RobotController(Node):
         # Publish once immediately (helps with responsiveness during blocking operations)
         if self.use_stamped:
             msg = TwistStamped()
-            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.stamp = rospy.Time.now()
             msg.header.frame_id = self.frame_id
             msg.twist.linear.x = self.lin
             msg.twist.angular.z = self.ang
@@ -142,13 +156,20 @@ class RobotController(Node):
         self.lin = 0.0
         self.ang = 0.0
         self._print_status()
+        self._publish_immediate()
+
+    def shutdown(self):
+        """Shutdown the controller."""
+        self.running = False
+        if self.timer_thread:
+            self.timer_thread.join(timeout=1.0)
 
     def _print_status(self):
         print(f"\rmax_lin: {self.max_lin:.2f} m/s | max_ang: {self.max_ang:.2f} rad/s | "
               f"lin: {self.lin:.2f} | ang: {self.ang:.2f}      ",
               end='', flush=True)
 
-def run_client_mode(host='10.205.3.16', port=6969):
+def run_client_mode(host='10.205.3.16', port=6969, topic=None): 
     """
     Client mode: connects to a remote server and receives commands.
     Commands are JSON: {"throttle": -1..1, "angle": degrees_per_sec}
@@ -156,28 +177,34 @@ def run_client_mode(host='10.205.3.16', port=6969):
     Retries connection indefinitely until successful or keyboard interrupted.
     Automatically reconnects if connection is lost.
     """
-    rclpy.init()
-    node = RobotController(max_linear=0.5, max_angular=1.5, use_stamped=True, frame_id='base_link')
+    rospy.init_node('robot_controller', anonymous=False)
+    topic_to_use = topic or rospy.get_param('~cmd_vel_topic', os.environ.get('CMD_VEL_TOPIC', '/cmd_vel'))
+    max_linear = rospy.get_param('~max_linear', 0.5)
+    max_angular = rospy.get_param('~max_angular', 1.5)
+    use_stamped = rospy.get_param('~use_stamped', False)
+    frame_id = rospy.get_param('~frame_id', 'base_link')
+    node = RobotController(max_linear=max_linear, max_angular=max_angular, use_stamped=use_stamped, frame_id=frame_id, topic=topic_to_use)
     
-    # Spin in background
-    spinner = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
-    spinner.start()
+    # Start timer thread for continuous publishing
+    node.start_timer()
+    rospy.on_shutdown(node.stop)
     
     sock = None
     try:
-        while rclpy.ok():
+        while not rospy.is_shutdown():
             # Stop robot while disconnected
             node.stop()
             
             # Connection loop
             connected = False
-            while not connected and rclpy.ok():
+            while not connected and not rospy.is_shutdown():
                 try:
                     print(f"[CLIENT] Connecting to server at {host}:{port}...")
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.connect((host, port))
                     connected = True
                     print(f"[CLIENT] Connected to {host}:{port}")
+                    print(f"[CLIENT] Publishing to topic: {node.topic} ({'TwistStamped' if node.use_stamped else 'Twist'})")
                     sock.settimeout(0.1)
                 except KeyboardInterrupt:
                     raise  # Re-raise to be caught by outer try-except
@@ -190,12 +217,12 @@ def run_client_mode(host='10.205.3.16', port=6969):
                     time.sleep(1.0)
             
             if not connected:
-                break  # Exit if not connected and rclpy not ok
+                break  # Exit if not connected and rospy is shutdown
             
             # Message receiving loop
             buffer = ""
             try:
-                while rclpy.ok():
+                while not rospy.is_shutdown():
                     try:
                         data = sock.recv(1024)
                         if not data:
@@ -238,70 +265,77 @@ def run_client_mode(host='10.205.3.16', port=6969):
             sock.close()
         if node.use_stamped:
             stop = TwistStamped()
-            stop.header.stamp = node.get_clock().now().to_msg()
+            stop.header.stamp = rospy.Time.now()
             stop.header.frame_id = node.frame_id
             node.publisher_.publish(stop)
         else:
             stop = Twist()
             node.publisher_.publish(stop)
-        rclpy.shutdown()
+        node.shutdown()
         print("[CLIENT] Exiting.")
 
 def main():
     """
     Main entry point: can run in client mode or standalone demo mode.
     Usage:
-      python3 move.py                    # standalone demo
-      python3 move.py client [host] [port]  # connect to server
+      python move_ros1.py                    # standalone demo
+      python move_ros1.py client [host] [port]  # connect to server
     """
     if len(sys.argv) > 1 and sys.argv[1] == 'client':
         host = sys.argv[2] if len(sys.argv) > 2 else '10.205.3.16'
         port = int(sys.argv[3]) if len(sys.argv) > 3 else 6969
-        run_client_mode(host, port)
+        topic = sys.argv[4] if len(sys.argv) > 4 else os.environ.get('CMD_VEL_TOPIC', '/cmd_vel')
+        run_client_mode(host, port, topic)
     else:
         # Standalone demo mode with interactive input
-        rclpy.init()
-        node = RobotController(max_linear=0.5, max_angular=1.5, use_stamped=True, frame_id='base_link')
+        rospy.init_node('robot_controller', anonymous=False)
+        topic_to_use = rospy.get_param('~cmd_vel_topic', os.environ.get('CMD_VEL_TOPIC', '/cmd_vel'))
+        max_linear = rospy.get_param('~max_linear', 0.5)
+        max_angular = rospy.get_param('~max_angular', 1.5)
+        use_stamped = rospy.get_param('~use_stamped', False)
+        frame_id = rospy.get_param('~frame_id', 'base_link')
+        node = RobotController(max_linear=max_linear, max_angular=max_angular, use_stamped=use_stamped, frame_id=frame_id, topic=topic_to_use)
+        
+        # Start timer thread for continuous publishing
+        node.start_timer()
+        rospy.on_shutdown(node.stop)
 
         try:
             print("Moving forward for 2s")
             node.set_movement(throttle=1.0, angle=0.0)
-            t_end = time.time() + 2.0
-            while time.time() < t_end and rclpy.ok():
-                rclpy.spin_once(node, timeout_sec=0.0)
-                time.sleep(0.1)
+            rospy.sleep(2.0)
 
             print("Turning left for 2s")
             node.set_movement(throttle=1.0, angle=0.3)
-            t_end = time.time() + 2.0
-            while time.time() < t_end and rclpy.ok():
-                rclpy.spin_once(node, timeout_sec=0.0)
-                time.sleep(0.1)
+            rospy.sleep(2.0)
 
             print("Stopping")
             node.set_movement(throttle=0.0, angle=0.0)
-            # Spin in background so timers keep firing during interactive input
-            spinner = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
-            spinner.start()
+            
             print("\nStandalone mode: Enter commands (throttle angle)")
             print("Example: '0.8 60' = forward at 80% with 60 deg/s turn")
-            while True:
-                throttle_input, angle = input("Throttle and Angle: ").split()
-                node.set_movement(throttle=throttle_input, angle=angle)
+            while not rospy.is_shutdown():
+                try:
+                    throttle_input, angle = input("Throttle and Angle: ").split()
+                    node.set_movement(throttle=throttle_input, angle=angle)
+                except (ValueError, EOFError):
+                    print("Invalid input. Please enter two numbers separated by space.")
+                    continue
         except KeyboardInterrupt:
             print("\nStopping robot...")
             node.stop()
         finally:
             if node.use_stamped:
                 stop = TwistStamped()
-                stop.header.stamp = node.get_clock().now().to_msg()
+                stop.header.stamp = rospy.Time.now()
                 stop.header.frame_id = node.frame_id
                 node.publisher_.publish(stop)
             else:
                 stop = Twist()
                 node.publisher_.publish(stop)
-            rclpy.shutdown()
+            node.shutdown()
             print("Exiting.")
 
 if __name__ == '__main__':
     main()
+

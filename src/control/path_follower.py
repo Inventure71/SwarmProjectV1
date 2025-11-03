@@ -107,7 +107,11 @@ class PathFollower:
                  segment_pass_lateral_factor=1.5,
                  waypoint_approach_slowdown=0.4,
                  corner_keep_angle_deg=20.0,
-                 intermediate_corner_slowdown_deg=65.0):
+                 intermediate_corner_slowdown_deg=65.0,
+                 lateral_offset=0.0,
+                 speed_multiplier=1.0,
+                 waypoint_stuck_timeout=15.0,
+                 max_overshoot_count=3):
         """
         Initialize path follower.
         
@@ -129,6 +133,8 @@ class PathFollower:
             waypoint_approach_slowdown: Distance over which to reduce speed near critical waypoints
             corner_keep_angle_deg: Preserve corners sharper than this angle during simplification
             intermediate_corner_slowdown_deg: Apply approach slowdown only if turn exceeds this angle
+            waypoint_stuck_timeout: Seconds before force-skipping a waypoint to prevent infinite circling
+            max_overshoot_count: Number of overshoots before force-skipping to prevent zig-zagging
         """
         self.path_simplification_tolerance = max(0.0, path_simplification_tolerance)
         self.min_waypoint_separation = max(0.0, min_waypoint_separation)
@@ -149,19 +155,159 @@ class PathFollower:
         self.curvature_speed_gain = curvature_speed_gain
         self.min_speed_ratio = min_speed_ratio
         self.slow_down_distance = slow_down_distance
+        
+        # Offset management with gradual transitions
+        self.target_offset = lateral_offset
+        self.current_offset = lateral_offset  # Start with the initial offset immediately
+        self.offset_transition_rate = 0.5  # meters per second for live changes
+        self.last_offset_update_time = None
+        
+        self.speed_multiplier = speed_multiplier
+        self.loop_enabled = False
         self.soft_turn_stop_ratio = 0.6
         self.soft_turn_stop_distance = max(0.3, self.waypoint_tolerance * 2.0)
         
         self.current_waypoint_index = 0
         self.current_position = None
         self.predictor = PositionPredictor()
+        self.path_following_active = False
+        
+        # Anti-stuck mechanisms
+        self.waypoint_stuck_timeout = waypoint_stuck_timeout
+        self.waypoint_start_time = None
+        self.last_waypoint_index = -1
+        self.consecutive_overshoot_count = 0  # Track zig-zag oscillations
+        self.max_overshoot_count = max_overshoot_count
         
     def set_waypoints(self, waypoints):
         """Set new waypoints and reset to beginning."""
         self.raw_waypoints = list(waypoints)
         self.waypoints = self._process_waypoints(self.raw_waypoints)
         self.current_waypoint_index = 0
-        self.predictor.reset()  # Reset predictor when setting new waypoints
+        self.predictor.reset()
+    
+    def set_lateral_offset(self, offset):
+        """Set target lateral offset. Robot will gradually transition to this offset."""
+        self.target_offset = offset
+    
+    def get_lateral_offset_info(self):
+        """Get current and target offset information."""
+        return {
+            'current_offset': self.current_offset,
+            'target_offset': self.target_offset,
+            'transition_rate': self.offset_transition_rate
+        }
+    
+    def _update_current_offset(self, timestamp=None):
+        """Gradually update current_offset towards target_offset."""
+        if timestamp is None:
+            timestamp = time.time()
+        
+        # First call - initialize timestamp
+        if self.last_offset_update_time is None:
+            self.last_offset_update_time = timestamp
+            return
+        
+        # Calculate time delta
+        dt = timestamp - self.last_offset_update_time
+        self.last_offset_update_time = timestamp
+        
+        # Clamp dt to reasonable values
+        if dt < 0.001 or dt > 1.0:
+            return
+        
+        # Calculate offset difference
+        offset_diff = self.target_offset - self.current_offset
+        
+        # If already at target, nothing to do
+        if abs(offset_diff) < 0.001:
+            return
+        
+        # Calculate maximum change this frame
+        max_change = self.offset_transition_rate * dt
+        
+        # Apply change towards target
+        if abs(offset_diff) <= max_change:
+            self.current_offset = self.target_offset
+        else:
+            self.current_offset += max_change * (1.0 if offset_diff > 0 else -1.0)
+    
+    def _get_offset_waypoints(self):
+        """Get waypoints with current offset applied via scaling/translation."""
+        # Safety check: always return original waypoints if empty or single point
+        if not self.waypoints or len(self.waypoints) < 1:
+            return self.waypoints
+        
+        # If offset is negligible or only one waypoint, return original
+        if abs(self.current_offset) < 0.001 or len(self.waypoints) < 2:
+            return self.waypoints
+        
+        # Calculate centroid of the path
+        centroid_x = sum(p[0] for p in self.waypoints) / len(self.waypoints)
+        centroid_y = sum(p[1] for p in self.waypoints) / len(self.waypoints)
+        
+        # Check if path is closed (start and end are close)
+        start = self.waypoints[0]
+        end = self.waypoints[-1]
+        path_closed = math.hypot(end[0] - start[0], end[1] - start[1]) < 0.3
+        
+        # Calculate average distance from centroid
+        avg_radius = sum(math.hypot(p[0] - centroid_x, p[1] - centroid_y) 
+                        for p in self.waypoints) / len(self.waypoints)
+        
+        if path_closed and avg_radius > 0.1:
+            # For closed paths, scale from centroid
+            # Positive offset = move away from center (larger path)
+            # Negative offset = move toward center (smaller path)
+            scale_factor = (avg_radius + self.current_offset) / avg_radius if avg_radius > 0 else 1.0
+            
+            offset_waypoints = []
+            for x, y in self.waypoints:
+                # Vector from centroid to point
+                dx = x - centroid_x
+                dy = y - centroid_y
+                # Scale the vector
+                new_x = centroid_x + dx * scale_factor
+                new_y = centroid_y + dy * scale_factor
+                offset_waypoints.append((new_x, new_y))
+            
+            return offset_waypoints
+        else:
+            # For open paths, use perpendicular offset at each segment
+            offset_waypoints = []
+            for i in range(len(self.waypoints)):
+                x, y = self.waypoints[i]
+                
+                # Calculate path direction at this point
+                if i == 0:
+                    # First point: use direction to next point
+                    next_x, next_y = self.waypoints[i + 1]
+                    dx = next_x - x
+                    dy = next_y - y
+                elif i == len(self.waypoints) - 1:
+                    # Last point: use direction from previous point
+                    prev_x, prev_y = self.waypoints[i - 1]
+                    dx = x - prev_x
+                    dy = y - prev_y
+                else:
+                    # Middle points: average of incoming and outgoing directions
+                    prev_x, prev_y = self.waypoints[i - 1]
+                    next_x, next_y = self.waypoints[i + 1]
+                    dx = (x - prev_x + next_x - x) / 2.0
+                    dy = (y - prev_y + next_y - y) / 2.0
+                
+                # Calculate perpendicular direction (left is positive offset)
+                path_len = math.sqrt(dx**2 + dy**2)
+                if path_len > 0.01:
+                    perp_x = -dy / path_len
+                    perp_y = dx / path_len
+                    offset_x = x + perp_x * self.current_offset
+                    offset_y = y + perp_y * self.current_offset
+                    offset_waypoints.append((offset_x, offset_y))
+                else:
+                    offset_waypoints.append((x, y))
+            
+            return offset_waypoints
         
     def add_waypoint(self, x, y):
         """Add a waypoint to the path."""
@@ -180,6 +326,9 @@ class PathFollower:
         """Reset to start of path."""
         self.current_waypoint_index = 0
         self.predictor.reset()
+        self.waypoint_start_time = None
+        self.last_waypoint_index = -1
+        self.consecutive_overshoot_count = 0
         
     def update_position(self, x, y, yaw, timestamp=None):
         """
@@ -198,9 +347,14 @@ class PathFollower:
         
     def get_current_target(self):
         """Get current target waypoint or None if complete."""
-        if self.current_waypoint_index >= len(self.waypoints):
+        if not self.waypoints or self.current_waypoint_index >= len(self.waypoints):
             return None
-        return self.waypoints[self.current_waypoint_index]
+        # Get offset waypoints and return the current target
+        offset_waypoints = self._get_offset_waypoints()
+        # Safety check: ensure offset waypoints has same length
+        if not offset_waypoints or self.current_waypoint_index >= len(offset_waypoints):
+            return None
+        return offset_waypoints[self.current_waypoint_index]
     
     def get_progress(self):
         """Get progress through path (completed waypoints, total waypoints)."""
@@ -208,6 +362,8 @@ class PathFollower:
     
     def is_complete(self):
         """Check if path following is complete."""
+        if self.loop_enabled:
+            return False
         return self.current_waypoint_index >= len(self.waypoints)
     
     def compute_command(self):
@@ -224,6 +380,9 @@ class PathFollower:
         """
         if self.current_position is None:
             return 0.0, 0.0
+        
+        # Update the current offset gradually towards target offset
+        self._update_current_offset()
             
         if self.is_complete():
             return 0.0, 0.0
@@ -248,15 +407,42 @@ class PathFollower:
         dx = target_x - control_x
         dy = target_y - control_y
         distance = math.sqrt(dx**2 + dy**2)
+        
+        # Initialize waypoint timing if this is a new waypoint
+        if self.current_waypoint_index != self.last_waypoint_index:
+            self.waypoint_start_time = time.time()
+            self.last_waypoint_index = self.current_waypoint_index
+            self.consecutive_overshoot_count = 0
 
         # Check if waypoint reached or safely passed
-        if self._should_advance_waypoint(distance, control_x, control_y, robot_x, robot_y):
+        should_advance, overshoot_detected = self._should_advance_waypoint(distance, control_x, control_y, robot_x, robot_y)
+        
+        # Track overshoots for zig-zag detection
+        if overshoot_detected:
+            self.consecutive_overshoot_count += 1
+        
+        # Force skip waypoint if stuck (timeout or too many overshoots)
+        force_skip = False
+        if self.waypoint_start_time is not None:
+            time_on_waypoint = time.time() - self.waypoint_start_time
+            if time_on_waypoint > self.waypoint_stuck_timeout:
+                force_skip = True
+        
+        if self.consecutive_overshoot_count >= self.max_overshoot_count:
+            force_skip = True
+        
+        if should_advance or force_skip:
             self.current_waypoint_index += 1
-            # Recursively check next waypoint, but limit depth to avoid infinite loops
-            if self.current_waypoint_index < len(self.waypoints):
-                return self.compute_command()  # Immediately target next waypoint
+            self.consecutive_overshoot_count = 0
+            
+            if self.current_waypoint_index >= len(self.waypoints):
+                if self.loop_enabled:
+                    self.current_waypoint_index = 0
+                    return self.compute_command()
+                else:
+                    return 0.0, 0.0
             else:
-                return 0.0, 0.0  # Path complete
+                return self.compute_command()
         
         # Calculate desired heading
         desired_yaw = math.atan2(dy, dx)
@@ -279,8 +465,14 @@ class PathFollower:
         if not math.isfinite(angle_diff_deg):
             return 0.0, 0.0
         
+        # Mark as actively following
+        self.path_following_active = True
+        
+        # During active path following, use a much higher turn threshold to prevent stopping
+        effective_turn_threshold = 180.0 if self.path_following_active else self.turn_in_place_threshold
+        
         # Determine throttle and turn rate
-        if abs(angle_diff_deg) > self.turn_in_place_threshold:
+        if abs(angle_diff_deg) > effective_turn_threshold:
             # Turn in place
             throttle = 0.0
             turn_rate = max(-self.max_turn_rate, 
@@ -296,8 +488,8 @@ class PathFollower:
             else:
                 throttle = max(self.min_speed_ratio, min(1.0, curvature_scale))
             
-            # Apply distance-based throttle reduction near final waypoint
-            if self.current_waypoint_index + 1 >= len(self.waypoints) and self.slow_down_distance > 1e-6 and distance < self.slow_down_distance:
+            # Apply distance-based throttle reduction near final waypoint (but not when looping)
+            if not self.loop_enabled and self.current_waypoint_index + 1 >= len(self.waypoints) and self.slow_down_distance > 1e-6 and distance < self.slow_down_distance:
                 distance_scale = self.min_speed_ratio + \
                                  (1.0 - self.min_speed_ratio) * \
                                  (distance / self.slow_down_distance)
@@ -310,8 +502,8 @@ class PathFollower:
                 high_angle = abs(angle_diff_deg) > self.turn_in_place_threshold * self.soft_turn_stop_ratio
                 if high_angle and distance < self.soft_turn_stop_distance:
                     throttle = 0.0
-
-            if throttle > 0.0 and self.waypoint_approach_slowdown > 1e-6:
+            
+            if throttle > 0.0 and self.waypoint_approach_slowdown > 1e-6 and not self.loop_enabled:
                 apply_slowdown = False
                 final_waypoint = (self.current_waypoint_index + 1) >= len(self.waypoints)
                 if final_waypoint:
@@ -333,6 +525,9 @@ class PathFollower:
         # Final safety check on turn rate
         if not math.isfinite(turn_rate):
             turn_rate = 0.0
+        
+        # Apply speed multiplier
+        throttle = throttle * self.speed_multiplier
         
         # Clamp throttle
         if not math.isfinite(throttle):
@@ -449,49 +644,77 @@ class PathFollower:
         return self._angle_between(vec_in, vec_out)
 
     def _should_advance_waypoint(self, distance, control_x, control_y, robot_x, robot_y):
-        """Decide if current waypoint can be considered reached or safely passed."""
+        """
+        Decide if current waypoint can be considered reached or safely passed.
+        
+        Returns:
+            (should_advance, overshoot_detected): tuple of booleans
+        """
         if distance < self.waypoint_tolerance:
-            return True
+            return True, False
 
         idx = self.current_waypoint_index
         if idx + 1 >= len(self.waypoints):
-            return False
+            return False, False
 
-        target = self.waypoints[idx]
-        next_target = self.waypoints[idx + 1]
+        # Use offset waypoints for advancement checking
+        offset_waypoints = self._get_offset_waypoints()
+        
+        # Safety check: ensure we have enough waypoints
+        if not offset_waypoints or idx + 1 >= len(offset_waypoints):
+            return False, False
+            
+        target = offset_waypoints[idx]
+        next_target = offset_waypoints[idx + 1]
 
         seg_dx = next_target[0] - target[0]
         seg_dy = next_target[1] - target[1]
         seg_len = math.hypot(seg_dx, seg_dy)
 
         if seg_len < 1e-6:
-            return True
+            return True, False
 
         vector_to_robot = (robot_x - target[0], robot_y - target[1])
         parallel = (vector_to_robot[0] * seg_dx + vector_to_robot[1] * seg_dy) / seg_len
 
-        if parallel < 0.0:
-            return False
+        # Check if robot is behind the waypoint (moving away from it)
+        if parallel < -self.waypoint_tolerance:
+            # Robot is significantly behind - might be stuck circling
+            return False, False
 
         lateral = abs(vector_to_robot[0] * seg_dy - vector_to_robot[1] * seg_dx) / seg_len
         lateral_limit = self.waypoint_tolerance * self.segment_pass_lateral_factor
+        
+        # Detect overshoot: robot has passed waypoint but lateral error is too high
+        overshoot_detected = False
+        if parallel > seg_len * 0.5 and lateral > lateral_limit:
+            overshoot_detected = True
 
+        # If lateral error is too high, don't advance yet (unless we detect zig-zag)
         if lateral > lateral_limit:
-            return False
+            return False, overshoot_detected
 
+        # Short segments can be skipped easily
         if seg_len <= max(self.min_waypoint_separation * 0.5, self.segment_pass_distance * 0.75):
-            return True
+            return True, False
 
         pass_margin = max(self.segment_pass_distance, seg_len * 0.1)
         pass_threshold = seg_len - pass_margin
 
+        # Robot is far enough along the segment
         if parallel >= pass_threshold:
-            return True
+            return True, False
 
+        # Robot has passed the waypoint with acceptable lateral error
         if parallel >= seg_len and lateral <= lateral_limit * 0.8:
-            return True
+            return True, False
+        
+        # Check if robot has gone way past the target (clear overshoot)
+        if parallel > seg_len * 1.5:
+            # Robot is way past - force advance to prevent circling back
+            return True, True
 
-        return False
+        return False, overshoot_detected
     
     def get_state(self):
         """
@@ -526,6 +749,10 @@ class PathFollower:
             while angle < -math.pi:
                 angle += 2 * math.pi
         
+        time_on_waypoint = None
+        if self.waypoint_start_time is not None:
+            time_on_waypoint = time.time() - self.waypoint_start_time
+        
         return {
             'position': self.current_position,
             'target': target,
@@ -533,7 +760,11 @@ class PathFollower:
             'angle_to_target': angle,
             'waypoint_index': self.current_waypoint_index,
             'total_waypoints': len(self.waypoints),
-            'complete': self.is_complete()
+            'complete': self.is_complete(),
+            'current_offset': self.current_offset,
+            'target_offset': self.target_offset,
+            'time_on_waypoint': time_on_waypoint,
+            'overshoot_count': self.consecutive_overshoot_count
         }
 
 
