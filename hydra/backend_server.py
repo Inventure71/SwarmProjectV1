@@ -343,6 +343,7 @@ class BackendServer:
                 "ros_connected": True,
                 "tracked_robots": list(robot_states.keys()),
                 "controlled_robots": list(self.controller.get_registered_robots().keys()),
+                "connected_clients": len(self.udp_server.get_connected_clients()),
             }
             self.udp_server.broadcast({"type": "connection_status", "data": connection_status})
 
@@ -526,6 +527,46 @@ class BackendServer:
             self.controller.send_command(name, float(throttle), float(turn_rate))
 
         self._send_ack(addr, "manual_control")
+
+    def _cmd_get_diagnostics(self, data: Dict, addr: Tuple[str, int]) -> None:
+        """Get diagnostic information about tracking and robot states."""
+        poses = self.tracker.get_all_poses()
+        diagnostics = {
+            "tracked_poses": {},
+            "robot_states": {},
+            "ros_connected": not rospy.is_shutdown(),
+        }
+        
+        for name, pose in poses.items():
+            diagnostics["tracked_poses"][name] = {
+                "x": pose.x,
+                "y": pose.y,
+                "z": pose.z,
+                "yaw": pose.yaw,
+                "timestamp": pose.timestamp,
+                "frame_id": pose.frame_id,
+            }
+        
+        for name, robot in self.robots.items():
+            x, y, yaw = robot.get_position()
+            diagnostics["robot_states"][name] = {
+                "x": x,
+                "y": y,
+                "yaw": yaw,
+                "type": robot.robot_type,
+            }
+        
+        self._send_ack(addr, "get_diagnostics", diagnostics)
+
+    def _cmd_ping(self, data: Dict, addr: Tuple[str, int]) -> None:
+        """Handle ping/heartbeat messages from clients to keep connection alive."""
+        # No action needed - just receiving the message updates the client timestamp
+        pass
+
+    def _cmd_hello(self, data: Dict, addr: Tuple[str, int]) -> None:
+        """Handle hello messages from clients."""
+        # No action needed - just receiving the message registers the client
+        pass
 
     # ------------------------------------------------------------------
     # Helpers

@@ -75,6 +75,7 @@ class UDPServer:
             stale = [addr for addr, ts in self._clients.items() if now - ts > self.client_ttl]
             for addr in stale:
                 del self._clients[addr]
+                print(f"[UDPServer] Client {addr[0]}:{addr[1]} timed out (no message in {self.client_ttl}s)")
 
             clients = list(self._clients.keys())
 
@@ -83,6 +84,11 @@ class UDPServer:
 
     def send_to(self, addr: Tuple[str, int], message: JsonDict) -> None:
         self._sendto(json.dumps(message).encode("utf-8"), addr)
+
+    def get_connected_clients(self) -> list:
+        """Return list of currently connected client addresses."""
+        with self._lock:
+            return list(self._clients.keys())
 
     def _serve_forever(self) -> None:
         assert self._socket is not None
@@ -104,7 +110,11 @@ class UDPServer:
                 continue
 
             with self._lock:
+                is_new_client = addr not in self._clients
                 self._clients[addr] = time.time()
+            
+            if is_new_client:
+                print(f"[UDPServer] New client connected: {addr[0]}:{addr[1]}")
 
             if self._handler:
                 try:

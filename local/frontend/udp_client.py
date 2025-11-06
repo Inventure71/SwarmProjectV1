@@ -25,14 +25,17 @@ class UDPClient:
         port: int,
         on_message: Optional[MessageCallback] = None,
         socket_timeout: float = 0.5,
+        heartbeat_interval: float = 10.0,
     ) -> None:
         self.host = host
         self.port = port
         self.socket_timeout = socket_timeout
         self.on_message = on_message
+        self.heartbeat_interval = heartbeat_interval
 
         self._socket: Optional[socket.socket] = None
         self._listener_thread: Optional[threading.Thread] = None
+        self._heartbeat_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
         self._callbacks: DefaultDict[str, List[MessageCallback]] = defaultdict(list)
@@ -62,6 +65,11 @@ class UDPClient:
         self._listener_thread = threading.Thread(target=self._listen_loop, daemon=True)
         self._listener_thread.start()
 
+        # Start heartbeat thread to maintain connection
+        if self.heartbeat_interval > 0:
+            self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+            self._heartbeat_thread.start()
+
         # Send hello to register with backend
         self.send({"type": "hello", "data": {"timestamp": time.time()}})
 
@@ -70,6 +78,9 @@ class UDPClient:
         if self._listener_thread:
             self._listener_thread.join(timeout=1.0)
             self._listener_thread = None
+        if self._heartbeat_thread:
+            self._heartbeat_thread.join(timeout=1.0)
+            self._heartbeat_thread = None
 
         if self._socket:
             try:
@@ -173,6 +184,21 @@ class UDPClient:
                 continue
 
             self._dispatch_message(message)
+
+    def _heartbeat_loop(self) -> None:
+        """Send periodic heartbeat messages to keep connection alive."""
+        while not self._stop_event.is_set():
+            try:
+                self.send({"type": "ping", "data": {"timestamp": time.time()}})
+            except Exception as exc:
+                if not self._stop_event.is_set():
+                    print(f"[UDPClient] Heartbeat failed: {exc}")
+            
+            # Sleep in small intervals to allow quick shutdown
+            elapsed = 0.0
+            while elapsed < self.heartbeat_interval and not self._stop_event.is_set():
+                time.sleep(0.5)
+                elapsed += 0.5
 
     def _dispatch_message(self, message: JsonDict) -> None:
         msg_type = message.get("type")

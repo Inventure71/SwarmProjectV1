@@ -15,7 +15,7 @@
     "menelao": {
       "name": "menelao",
       "type": "real",
-      "umh_id": "umh_7",
+      "umh_id": "umh_4",
       "cmd_vel_topic": "/menelao/cmd_vel"
     },
     "philip": {

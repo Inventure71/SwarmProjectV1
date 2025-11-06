@@ -39,7 +39,7 @@ def _quat_to_yaw(x: float, y: float, z: float, w: float) -> float:
     """Convert quaternion to yaw (Z rotation)."""
     siny_cosp = 2.0 * (w * z + x * y)
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    return math.atan2(siny_cosp, cosy_cosp)
+    return -math.atan2(siny_cosp, cosy_cosp)  # Negated to match OptiTrack convention
 
 
 class ROSTracker:
@@ -56,6 +56,7 @@ class ROSTracker:
         self._poses: Dict[str, PoseState] = {}
         self._subscribers: Dict[str, rospy.Subscriber] = {}
         self._types: Dict[str, str] = {}
+        self._callback_counts: Dict[str, int] = {}
 
     def register_robot(self, robot_name: str, robot_config: Dict) -> None:
         """Register (or update) a robot subscription based on configuration."""
@@ -83,6 +84,19 @@ class ROSTracker:
             queue_size=self._queue_size,
         )
         rospy.loginfo("[ROSTracker] Subscribed %s to %s", robot_name, pose_topic)
+        
+        # Warn if topic doesn't exist yet (may take time to appear)
+        try:
+            published_topics = rospy.get_published_topics()
+            topic_names = [t[0] for t in published_topics]
+            if pose_topic not in topic_names:
+                rospy.logwarn(
+                    "[ROSTracker] Topic %s not currently publishing. "
+                    "Verify natnet_ros is running and rigid body '%s' exists in Motive.",
+                    pose_topic, robot_config.get("umh_id", "?")
+                )
+        except Exception as e:
+            rospy.logwarn("[ROSTracker] Could not check if topic exists: %s", e)
 
     def remove_robot(self, robot_name: str) -> None:
         """Remove a robot subscription and cached state."""
@@ -115,7 +129,7 @@ class ROSTracker:
             yaw = _quat_to_yaw(orientation.x, orientation.y, orientation.z, orientation.w)
 
             pose = PoseState(
-                x=position.x,
+                x=-position.x,  # Flip horizontal axis
                 y=position.y,
                 z=position.z,
                 yaw=yaw,
@@ -125,6 +139,20 @@ class ROSTracker:
 
             with self._lock:
                 self._poses[robot_name] = pose
+                self._callback_counts[robot_name] = self._callback_counts.get(robot_name, 0) + 1
+                count = self._callback_counts[robot_name]
+            
+            # Log first pose and periodically (every 100 messages)
+            if count == 1:
+                rospy.loginfo(
+                    "[ROSTracker] First pose received for %s: x=%.3f, y=%.3f, yaw=%.3f",
+                    robot_name, pose.x, pose.y, pose.yaw
+                )
+            elif count % 100 == 0:
+                rospy.logdebug(
+                    "[ROSTracker] %s pose update #%d: x=%.3f, y=%.3f, yaw=%.3f",
+                    robot_name, count, pose.x, pose.y, pose.yaw
+                )
 
         return _callback
 
