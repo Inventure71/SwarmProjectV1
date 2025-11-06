@@ -216,6 +216,7 @@ class TabbedInterface:
         
         # Create content frame (grid into same cell for overlap; we will raise on switch)
         content_frame = tk.Frame(self.content_area, bg=self.bg)
+        # Grid all tabs into the same cell - they'll be stacked
         content_frame.grid(row=0, column=0, sticky="nsew")
         
         # Store tab info
@@ -223,7 +224,20 @@ class TabbedInterface:
         
         # Set first tab as active (raise without repacking others)
         if self.current_tab is None:
-            self.switch_tab(name)
+            # First tab - ensure it's on top and visible
+            self.current_tab = name
+            tab_btn.set_active(True)
+            try:
+                content_frame.tkraise()
+            except Exception:
+                pass
+            self.content_area.update_idletasks()
+        else:
+            # Subsequent tabs - put them behind the current tab
+            try:
+                content_frame.lower()
+            except Exception:
+                pass
         
         return content_frame
     
@@ -237,15 +251,23 @@ class TabbedInterface:
         
         # Update previous tab button state (content remains packed; we use stacking)
         if self.current_tab:
-            old_btn, _ = self.tabs[self.current_tab]
+            old_btn, old_content = self.tabs[self.current_tab]
             old_btn.set_active(False)
+            # Lower the old content
+            try:
+                old_content.lower()
+            except Exception:
+                pass
         
         # Show new tab content by raising (instant switch)
         new_btn, new_content = self.tabs[name]
         try:
+            # Ensure the content frame is gridded
+            new_content.grid(row=0, column=0, sticky="nsew")
             new_content.tkraise()
         except Exception:
-            pass
+            # Fallback: ensure grid is set
+            new_content.grid(row=0, column=0, sticky="nsew")
         self.content_area.update_idletasks()
         new_btn.set_active(True)
         

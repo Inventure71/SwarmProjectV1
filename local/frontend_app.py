@@ -104,7 +104,8 @@ class RobotControllerApp:
         self._setup_ui()
         self._setup_services()
         # Apply initial theming based on active robot (after UI is fully rendered)
-        self.root.after(100, self._apply_active_robot_theme)
+        # Use a longer delay to ensure all widgets are created and visible
+        self.root.after(200, self._apply_active_robot_theme)
 
         self.root.bind("<Configure>", self._on_window_resize)
         self.root.after(500, self._auto_connect)
@@ -1359,6 +1360,10 @@ class RobotControllerApp:
             )
 
     def _apply_active_robot_theme(self) -> None:
+        """Apply the active robot's color theme to UI elements."""
+        if not hasattr(self, 'active_robot') or not hasattr(self, 'robot_colors'):
+            return
+        
         color = self.robot_colors.get(self.active_robot, "#00aaff")
         # Determine readable text color
         try:
@@ -1370,20 +1375,40 @@ class RobotControllerApp:
         luminance = 0.299 * r + 0.587 * g + 0.114 * b
         fg = "#000000" if luminance > 140 else "#ffffff"
         active_bg = color
+        
         # Apply to main control buttons using set_custom_color method
-        for btn in [self.start_btn, self.stop_btn, self.emergency_btn]:
+        buttons_to_update = []
+        if hasattr(self, 'start_btn'):
+            buttons_to_update.append(self.start_btn)
+        if hasattr(self, 'stop_btn'):
+            buttons_to_update.append(self.stop_btn)
+        if hasattr(self, 'emergency_btn'):
+            buttons_to_update.append(self.emergency_btn)
+        
+        for btn in buttons_to_update:
             try:
                 if hasattr(btn, 'set_custom_color'):
                     btn.set_custom_color(active_bg, fg)
                 else:
-                    btn.config(bg=active_bg, fg=fg, activebackground=active_bg, activeforeground=fg)
+                    # Fallback for non-ModernButton widgets
+                    btn.config(
+                        bg=active_bg, 
+                        fg=fg, 
+                        activebackground=active_bg, 
+                        activeforeground=fg,
+                        disabledbackground=active_bg,
+                        disabledforeground=fg
+                    )
+            except Exception as e:
+                # Silently fail - buttons might not be initialized yet
+                pass
+        
+        # Update command label accent color
+        if hasattr(self, 'cmd_label'):
+            try:
+                self.cmd_label.config(fg=color)
             except Exception:
                 pass
-        # Update command label accent color
-        try:
-            self.cmd_label.config(fg=color)
-        except Exception:
-            pass
 
     def _get_debug_info(self) -> str:
         x, y, yaw = self.get_robot_position(self.active_robot)

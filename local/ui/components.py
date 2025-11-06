@@ -89,12 +89,18 @@ class ModernButton(tk.Button):
             hover_bg = bg_color
         # Update style dict temporarily
         self._styles[self._current_style]['activebackground'] = hover_bg
-        # Apply colors
-        config = {'bg': bg_color}
+        # Apply colors - include disabled state colors
+        config = {
+            'bg': bg_color,
+            'disabledbackground': bg_color,  # Show color even when disabled
+        }
         if fg_color:
             config['fg'] = fg_color
             config['activeforeground'] = fg_color
+            config['disabledforeground'] = fg_color  # Show text color even when disabled
         super().configure(**config)
+        # Force update to ensure colors are applied
+        self.update_idletasks()
 
     def set_style(self, style):
         """Apply one of the predefined styles dynamically."""
