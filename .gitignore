@@ -68,4 +68,5 @@ ehthumbs.db
 Thumbs.db
 
 
-Testing/
+# Ignore all contents of testing except README files
+/testing/*
