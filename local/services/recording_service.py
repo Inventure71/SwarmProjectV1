@@ -135,6 +135,7 @@ class RecordingService:
     def set_joystick_enabled(self, enabled: bool):
         """Enable or disable joystick control."""
         enable_flag = bool(enabled)
-        if not enable_flag and self.joystick_control_active and self.robot_controller.connected:
-            self.robot_controller.send_command(0.0, 0.0)
+        if (not enable_flag and self.joystick_control_active and
+                self.robot_controller.connected and self.robot is not None):
+            self.robot_controller.send_command(0.0, 0.0, self.robot.username)
         self.joystick_control_active = enable_flag
