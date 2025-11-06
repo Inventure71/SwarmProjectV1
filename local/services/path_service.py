@@ -13,24 +13,39 @@ from tkinter import filedialog, messagebox
 class PathService:
     """Service for managing per-robot paths."""
     
-    def __init__(self, canvas, world_to_canvas_func, canvas_to_world_func):
+    def __init__(self, canvas, world_to_canvas_func, canvas_to_world_func, color_provider=None):
         self.canvas = canvas
         self.world_to_canvas = world_to_canvas_func
         self.canvas_to_world = canvas_to_world_func
         
         self.robot_paths: Dict[str, Dict[str, Any]] = {}
         self.path_colors = ['#00ff88', '#00aaff', '#ff6600', '#ff00ff', '#ffff00', '#00ffff']
+        self._color_provider = color_provider
     
     def _get_robot_path(self, robot_name: str) -> Dict[str, Any]:
         """Get or create path data for a robot."""
         if robot_name not in self.robot_paths:
             idx = len(self.robot_paths) % len(self.path_colors)
+            color = None
+            if callable(self._color_provider):
+                try:
+                    color = self._color_provider(robot_name)
+                except Exception:
+                    color = None
+            if not color:
+                color = self.path_colors[idx]
             self.robot_paths[robot_name] = {
                 'path_points': [],
                 'recorded_positions': [],
-                'color': self.path_colors[idx]
+                'color': color
             }
         return self.robot_paths[robot_name]
+
+    def set_path_color(self, robot_name: str, color: str, redraw: bool = True) -> None:
+        path_data = self._get_robot_path(robot_name)
+        path_data['color'] = color
+        if redraw:
+            self._redraw_path(robot_name)
     
     def add_waypoint(self, robot_name: str, x: int, y: int, mode: str = "click"):
         """Add a waypoint for a specific robot."""

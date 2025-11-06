@@ -7,6 +7,7 @@ Loads configuration from config.json and provides easy access to robot settings.
 import json
 from pathlib import Path
 from typing import Optional, Tuple
+import colorsys
 
 
 class ConfigLoader:
@@ -42,6 +43,69 @@ class ConfigLoader:
         ConfigLoader._config_path = config_path
 
         print(f"[ConfigLoader] Configuration loaded from {config_path}")
+        # Ensure robots have distinct colors assigned
+        self._ensure_robot_colors()
+
+    def _hex_to_rgb(self, hex_color: str) -> Tuple[int, int, int]:
+        hex_color = hex_color.lstrip('#')
+        if len(hex_color) == 3:
+            hex_color = ''.join([c*2 for c in hex_color])
+        try:
+            return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        except Exception:
+            return (0, 0, 0)
+
+    def _rgb_to_hex(self, rgb: Tuple[int, int, int]) -> str:
+        r, g, b = rgb
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _is_distinct(self, rgb: Tuple[int, int, int], existing_rgbs: list[Tuple[int, int, int]], threshold: float = 110.0) -> bool:
+        for er, eg, eb in existing_rgbs:
+            dr = rgb[0] - er
+            dg = rgb[1] - eg
+            db = rgb[2] - eb
+            if (dr*dr + dg*dg + db*db) ** 0.5 < threshold:
+                return False
+        return True
+
+    def _generate_distinct_color(self, existing_hex: list[str], attempt_seed: int = 0) -> str:
+        existing_rgbs = [self._hex_to_rgb(c) for c in existing_hex if isinstance(c, str) and c]
+        # Use golden ratio conjugate to distribute hues
+        phi = 0.61803398875
+        hue = (0.11 + (len(existing_rgbs) + attempt_seed) * phi) % 1.0
+        # Prefer vivid, not too light/dark
+        s = 0.80
+        v = 0.92
+        r, g, b = colorsys.hsv_to_rgb(hue, s, v)
+        rgb = (int(r * 255), int(g * 255), int(b * 255))
+        # If too close to existing, nudge hue
+        tries = 0
+        while not self._is_distinct(rgb, existing_rgbs) and tries < 12:
+            hue = (hue + 0.12) % 1.0
+            r, g, b = colorsys.hsv_to_rgb(hue, s, v)
+            rgb = (int(r * 255), int(g * 255), int(b * 255))
+            tries += 1
+        return self._rgb_to_hex(rgb)
+
+    def _ensure_robot_colors(self) -> None:
+        robots = ConfigLoader._config.setdefault('ROBOT_CONFIG', {})
+        changed = False
+        existing_colors: list[str] = []
+        # Collect already valid colors
+        for rname, rcfg in robots.items():
+            color = rcfg.get('color')
+            if isinstance(color, str) and len(color) in (4, 7) and color.startswith('#'):
+                existing_colors.append(color)
+        # Assign colors to those missing
+        for rname, rcfg in robots.items():
+            color = rcfg.get('color')
+            if not (isinstance(color, str) and len(color) in (4, 7) and color.startswith('#')):
+                new_color = self._generate_distinct_color(existing_colors)
+                rcfg['color'] = new_color
+                existing_colors.append(new_color)
+                changed = True
+        if changed:
+            self._persist_config()
 
     def _persist_config(self) -> None:
         """Persist the in-memory configuration back to disk."""
@@ -149,7 +213,13 @@ class ConfigLoader:
 
     def upsert_robot(self, robot_name: str, robot_config: dict, persist: bool = True) -> None:
         """Add or update a robot configuration and optionally persist to disk."""
-        ConfigLoader._config.setdefault('ROBOT_CONFIG', {})[robot_name] = robot_config
+        robots = ConfigLoader._config.setdefault('ROBOT_CONFIG', {})
+        # Ensure color assignment on insert/update
+        if 'color' not in robot_config or not robot_config['color']:
+            # Use currently assigned colors to pick a distinct one
+            existing = [cfg.get('color') for cfg in robots.values() if isinstance(cfg.get('color'), str)]
+            robot_config['color'] = self._generate_distinct_color(existing)
+        robots[robot_name] = robot_config
         if persist:
             self._persist_config()
 
