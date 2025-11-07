@@ -199,7 +199,7 @@ class RobotControllerApp:
         
         # Monitoring tab
         monitoring_frame = self.tabbed_ui.add_tab("Monitoring", "📊")
-        self.monitoring_tab = MonitoringTab(monitoring_frame)
+        self.monitoring_tab = MonitoringTab(monitoring_frame, self.state, on_robot_select=self._select_robot)
 
     def _initialize_canvas_dependent_services(self) -> None:
         """Initialize services that depend on canvas."""
@@ -623,17 +623,25 @@ class RobotControllerApp:
         robot_type = self.state.robots[self.state.active_robot].robot_type
         prefix = "🤖" if robot_type == "real" else "🎮"
         
-        # Update positions label in Monitoring tab
-        positions_text = f"{prefix} {self.state.active_robot}: ({x:6.3f}, {y:6.3f})m | {yaw_deg:6.1f}°\n\n"
-        for name, proxy in self.state.robots.items():
-            if name != self.state.active_robot:
-                rx, ry, ryaw = self.state.get_robot_position(name)
-                rprefix = "🤖" if proxy.robot_type == "real" else "🎮"
-                positions_text += f"{rprefix} {name}: ({rx:6.3f}, {ry:6.3f})m | {math.degrees(ryaw):6.1f}°\n"
-        self.monitoring_tab.update_positions(positions_text)
+        # Update monitoring tab with all robots
+        robot_states_dict = {}
+        for name in self.state.robots.keys():
+            rx, ry, ryaw = self.state.get_robot_position(name)
+            rbattery = self.state.get_robot_battery(name)
+            rimu = self.state.get_robot_imu(name)
+            robot_states_dict[name] = {
+                'x': rx,
+                'y': ry,
+                'yaw': ryaw,
+                'battery': rbattery,
+                'imu': rimu
+            }
         
-        # Update debug info
-        self.monitoring_tab.update_debug(self._get_debug_info())
+        follower_states = self.state.get_follower_states()
+        self.monitoring_tab.update_panels(self.state.robots, robot_states_dict, follower_states)
+        
+        # Update robot list to show real-time battery updates
+        self.robots_tab.update_robot_list()
         
         # Process joystick if active
         if self.recording_service.joystick_control_active:

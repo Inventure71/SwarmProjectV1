@@ -26,6 +26,8 @@ from ros.ros_tracker import PoseState, ROSTracker
 from net.udp_server import UDPServer
 from core.config_loader import load_config
 from core.robot import Robot, create_robot
+from trackers.battery_tracker import BatteryTracker
+from trackers.imu_tracker import IMUTracker
 
 
 DEFAULT_PARAMETERS = {
@@ -73,6 +75,8 @@ class BackendServer:
             use_stamped=hydra_cfg.get("use_stamped_cmd", False),
             frame_id=hydra_cfg.get("cmd_frame_id", "base_link"),
         )
+        self.battery_tracker = BatteryTracker()
+        self.imu_tracker = IMUTracker()
         self.udp_server = UDPServer(
             host=self.backend_host,
             port=self.backend_port,
@@ -114,6 +118,8 @@ class BackendServer:
         self.udp_server.stop()
         self.controller.shutdown()
         self.tracker.shutdown()
+        self.battery_tracker.shutdown()
+        self.imu_tracker.shutdown()
 
         with self._state_lock:
             for robot in self.robots.values():
@@ -149,6 +155,8 @@ class BackendServer:
         if robot_type == "real":
             self.tracker.register_robot(name, config)
             self.controller.register_robot(name, config)
+            self.battery_tracker.register_robot(name, robot, config)
+            self.imu_tracker.register_robot(name, robot, config)
 
         if persist:
             self.config_loader.upsert_robot(name, config)
@@ -162,6 +170,8 @@ class BackendServer:
         
         self.tracker.remove_robot(name)
         self.controller.remove_robot(name)
+        self.battery_tracker.remove_robot(name)
+        self.imu_tracker.remove_robot(name)
         if persist:
             self.config_loader.remove_robot(name)
 
@@ -305,12 +315,16 @@ class BackendServer:
             follower_states = {}
             for name, robot in robots_snapshot.items():
                 x, y, yaw = robot.get_position()
+                battery = robot.get_battery_state()
+                imu = robot.get_imu_state()
                 robot_states[name] = {
                     "x": x,
                     "y": y,
                     "yaw": yaw,
                     "type": robot.robot_type,
                     "is_following": robot.is_following_path(),
+                    "battery": battery,
+                    "imu": imu,
                 }
                 
                 if robot.is_following_path():

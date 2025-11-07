@@ -53,6 +53,8 @@ class AppState:
         # Robot state (thread-safe)
         self.robot_positions: Dict[str, Tuple[float, float, float]] = {}
         self.robot_states: Dict[str, Dict[str, float]] = {}
+        self.robot_battery_states: Dict[str, Dict] = {}
+        self.robot_imu_states: Dict[str, Dict] = {}
         self.follower_states: Dict[str, Dict[str, float]] = {}
         self.connection_status: Dict[str, object] = {}
         
@@ -83,6 +85,12 @@ class AppState:
                     state.get("y", 0.0),
                     state.get("yaw", 0.0),
                 )
+                battery = state.get("battery")
+                if battery:
+                    self.robot_battery_states[name] = battery
+                imu = state.get("imu")
+                if imu:
+                    self.robot_imu_states[name] = imu
     
     def update_follower_states(self, states: Dict[str, Dict]) -> None:
         """Update path following states (thread-safe)."""
@@ -103,4 +111,14 @@ class AppState:
         """Get copy of all robot positions (thread-safe)."""
         with self._lock:
             return dict(self.robot_positions)
+    
+    def get_robot_battery(self, name: str) -> Optional[Dict]:
+        """Get robot battery state (thread-safe)."""
+        with self._lock:
+            return self.robot_battery_states.get(name)
+    
+    def get_robot_imu(self, name: str) -> Optional[Dict]:
+        """Get robot IMU state (thread-safe)."""
+        with self._lock:
+            return self.robot_imu_states.get(name)
 

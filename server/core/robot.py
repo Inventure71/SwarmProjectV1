@@ -60,6 +60,21 @@ class Robot:
         
         # Reference to ROS controller (set externally)
         self._ros_controller: Optional[object] = None
+        
+        # Battery state (updated by BatteryTracker)
+        self.battery_voltage: Optional[float] = None
+        self.battery_percentage: Optional[float] = None
+        self.battery_current: Optional[float] = None
+        self.battery_temperature: Optional[float] = None
+        self.battery_charging: Optional[bool] = None
+        self.battery_power_supply_status: Optional[int] = None
+        self.battery_last_update: Optional[float] = None
+        
+        # IMU state (updated by IMUTracker)
+        self.imu_linear_accel: Optional[Tuple[float, float, float]] = None
+        self.imu_angular_velocity: Optional[Tuple[float, float, float]] = None
+        self.imu_orientation: Optional[Tuple[float, float, float, float]] = None
+        self.imu_last_update: Optional[float] = None
 
     def set_location(self, x, y, yaw=0):
         """
@@ -254,6 +269,99 @@ class Robot:
             self.path_follower.set_lateral_offset(self.racing_config.lateral_offset)
             self.path_follower.speed_multiplier = self.racing_config.speed_multiplier
             self.path_follower.loop_enabled = self.racing_config.loop_path
+    
+    def update_battery(self, voltage: Optional[float] = None,
+                      percentage: Optional[float] = None,
+                      current: Optional[float] = None,
+                      temperature: Optional[float] = None,
+                      charging: Optional[bool] = None,
+                      power_supply_status: Optional[int] = None) -> None:
+        """
+        Update battery state (called by BatteryTracker).
+        Thread-safe method for real-time battery updates.
+        
+        Args:
+            voltage: Battery voltage in volts
+            percentage: Battery percentage (0-100)
+            current: Battery current in amperes
+            temperature: Battery temperature in celsius
+            charging: Whether battery is charging
+            power_supply_status: Power supply status code
+        """
+        with self._lock:
+            if voltage is not None:
+                self.battery_voltage = voltage
+            if percentage is not None:
+                self.battery_percentage = percentage
+            if current is not None:
+                self.battery_current = current
+            if temperature is not None:
+                self.battery_temperature = temperature
+            if charging is not None:
+                self.battery_charging = charging
+            if power_supply_status is not None:
+                self.battery_power_supply_status = power_supply_status
+            self.battery_last_update = time.time()
+    
+    def get_battery_state(self) -> Optional[Dict]:
+        """
+        Get battery state in a thread-safe manner.
+        
+        Returns:
+            Dictionary with battery state or None if no data available
+        """
+        with self._lock:
+            if self.battery_voltage is None:
+                return None
+            
+            return {
+                'voltage': self.battery_voltage,
+                'percentage': self.battery_percentage,
+                'current': self.battery_current,
+                'temperature': self.battery_temperature,
+                'charging': self.battery_charging,
+                'power_supply_status': self.battery_power_supply_status,
+                'last_update': self.battery_last_update,
+            }
+    
+    def update_imu(self, linear_accel: Optional[Tuple[float, float, float]] = None,
+                  angular_velocity: Optional[Tuple[float, float, float]] = None,
+                  orientation: Optional[Tuple[float, float, float, float]] = None) -> None:
+        """
+        Update IMU state (called by IMUTracker).
+        Thread-safe method for real-time IMU updates.
+        
+        Args:
+            linear_accel: Linear acceleration (x, y, z) in m/s²
+            angular_velocity: Angular velocity (x, y, z) in rad/s
+            orientation: Orientation quaternion (x, y, z, w)
+        """
+        with self._lock:
+            if linear_accel is not None:
+                self.imu_linear_accel = linear_accel
+            if angular_velocity is not None:
+                self.imu_angular_velocity = angular_velocity
+            if orientation is not None:
+                self.imu_orientation = orientation
+            self.imu_last_update = time.time()
+    
+    def get_imu_state(self) -> Optional[Dict]:
+        """
+        Get IMU state in a thread-safe manner.
+        
+        Returns:
+            Dictionary with IMU state or None if no data available
+        """
+        with self._lock:
+            if self.imu_linear_accel is None:
+                return None
+            
+            return {
+                'linear_accel': self.imu_linear_accel,
+                'angular_velocity': self.imu_angular_velocity,
+                'orientation': self.imu_orientation,
+                'last_update': self.imu_last_update,
+            }
 
     def __repr__(self):
         """String representation of the robot."""
