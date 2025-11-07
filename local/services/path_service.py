@@ -35,7 +35,8 @@ class PathService:
             if not color:
                 color = self.path_colors[idx]
             self.robot_paths[robot_name] = {
-                'path_points': [],
+                'path_points_world': [],  # Store in world coordinates (meters)
+                'path_points': [],  # Legacy - kept for compatibility
                 'recorded_positions': [],
                 'color': color
             }
@@ -48,45 +49,30 @@ class PathService:
             self._redraw_path(robot_name)
     
     def add_waypoint(self, robot_name: str, x: int, y: int, mode: str = "click"):
-        """Add a waypoint for a specific robot."""
+        """Add a waypoint for a specific robot. x, y are canvas coordinates."""
         path_data = self._get_robot_path(robot_name)
-        path_data['path_points'].append((x, y))
         
-        color = path_data['color']
-        tag = f'waypoint_{robot_name}'
-        line_tag = f'path_line_{robot_name}'
+        # Convert canvas coordinates to world coordinates for storage
+        x_world, y_world = self.canvas_to_world(x, y)
+        path_data['path_points_world'].append((x_world, y_world))
+        path_data['path_points'].append((x, y))  # Keep for legacy compatibility
         
-        if mode == "draw":
-            size = 3
-            self.canvas.create_oval(x - size, y - size, x + size, y + size,
-                                   fill=color, outline=color, tags=tag)
-        else:
-            size = 6
-            self.canvas.create_oval(x - size, y - size, x + size, y + size,
-                                   fill=color, outline='#fff', width=2, tags=tag)
-            self.canvas.create_text(x, y - 16, text=str(len(path_data['path_points'])),
-                                   fill=color, font=('Arial', 10, 'bold'), tags=tag)
+        # Redraw entire path to reflect current zoom/pan
+        self._redraw_path(robot_name)
         
-        if len(path_data['path_points']) > 1:
-            prev_x, prev_y = path_data['path_points'][-2]
-            self.canvas.create_line(prev_x, prev_y, x, y, fill=color, width=3, tags=line_tag)
-        
-        return len(path_data['path_points'])
+        return len(path_data['path_points_world'])
     
     def set_recorded_path(self, robot_name: str, positions: List[Tuple[float, float]]):
-        """Set path from recorded positions for a specific robot."""
+        """Set path from recorded positions for a specific robot. Positions are in world coordinates (meters)."""
         path_data = self._get_robot_path(robot_name)
         path_data['recorded_positions'] = positions
-        path_data['path_points'] = []
-        
-        for x_m, y_m in positions:
-            x, y = self.world_to_canvas(x_m, y_m)
-            path_data['path_points'].append((x, y))
+        path_data['path_points_world'] = positions.copy()  # Store world coordinates
+        path_data['path_points'] = []  # Clear legacy
         
         self._redraw_path(robot_name)
     
     def _redraw_path(self, robot_name: str):
-        """Redraw path for a specific robot."""
+        """Redraw path for a specific robot, converting world coordinates to canvas coordinates."""
         if robot_name not in self.robot_paths:
             return
         
@@ -97,20 +83,32 @@ class PathService:
         self.canvas.delete(tag)
         self.canvas.delete(line_tag)
         
+        # Use world coordinates and convert to canvas coordinates based on current zoom/pan
+        world_points = path_data.get('path_points_world', [])
+        if not world_points:
+            return
+        
         color = path_data['color']
-        for i, (x, y) in enumerate(path_data['path_points']):
+        prev_canvas_x, prev_canvas_y = None, None
+        
+        for i, (x_world, y_world) in enumerate(world_points):
+            # Convert world coordinates to canvas coordinates
+            canvas_x, canvas_y = self.world_to_canvas(x_world, y_world)
+            
             size = 3
             self.canvas.create_oval(
-                x - size, y - size, x + size, y + size,
+                canvas_x - size, canvas_y - size, canvas_x + size, canvas_y + size,
                 fill=color, outline=color, tags=tag
             )
             
-            if i > 0:
-                prev_x, prev_y = path_data['path_points'][i-1]
+            # Draw line to previous point
+            if prev_canvas_x is not None:
                 self.canvas.create_line(
-                    prev_x, prev_y, x, y,
+                    prev_canvas_x, prev_canvas_y, canvas_x, canvas_y,
                     fill=color, width=3, tags=line_tag
                 )
+            
+            prev_canvas_x, prev_canvas_y = canvas_x, canvas_y
     
     def clear_path(self, robot_name: str):
         """Clear waypoints and path for a specific robot."""
@@ -129,8 +127,8 @@ class PathService:
         """Get waypoints in world coordinates for a specific robot."""
         if robot_name not in self.robot_paths:
             return []
-        path_points = self.robot_paths[robot_name]['path_points']
-        waypoints = [self.canvas_to_world(x, y) for x, y in path_points]
+        # Use world coordinates directly
+        waypoints = self.robot_paths[robot_name].get('path_points_world', []).copy()
         
         if loop and len(waypoints) > 2:
             first = waypoints[0]
@@ -154,7 +152,7 @@ class PathService:
     
     def save_path(self, robot_name: str) -> bool:
         """Save path for a specific robot."""
-        if robot_name not in self.robot_paths or len(self.robot_paths[robot_name]['path_points']) == 0:
+        if robot_name not in self.robot_paths or len(self.robot_paths[robot_name].get('path_points_world', [])) == 0:
             messagebox.showinfo("Save Path", f"No path to save for {robot_name}!")
             return False
         
@@ -210,9 +208,8 @@ class PathService:
                 self.clear_path(robot_name)
                 
                 path_data = self._get_robot_path(robot_name)
-                for x_m, y_m in waypoints_meters:
-                    x, y = self.world_to_canvas(x_m, y_m)
-                    path_data['path_points'].append((x, y))
+                # Store in world coordinates
+                path_data['path_points_world'] = waypoints_meters.copy()
                 
                 self._redraw_path(robot_name)
                 
@@ -236,12 +233,12 @@ class PathService:
         
         path_data = self.robot_paths[robot_name]
         return {
-            "num_waypoints": len(path_data['path_points']),
+            "num_waypoints": len(path_data.get('path_points_world', [])),
             "is_recorded": len(path_data['recorded_positions']) > 0,
             "waypoints_meters": self.get_waypoints_meters(robot_name, loop)
         }
     
     def has_path(self, robot_name: str) -> bool:
         """Check if robot has a path."""
-        return robot_name in self.robot_paths and len(self.robot_paths[robot_name]['path_points']) > 0
+        return robot_name in self.robot_paths and len(self.robot_paths[robot_name].get('path_points_world', [])) > 0
 

@@ -22,9 +22,9 @@ class TabButton(tk.Button):
         
         default_config = {
             "bg": "#2d2d2d",
-            "fg": "#b0b0b0",
+            "fg": "#000000",
             "activebackground": "#3a3a3a",
-            "activeforeground": "#ffffff",
+            "activeforeground": "#000000",
             "relief": tk.FLAT,
             "borderwidth": 0,
             "padx": 24,
@@ -50,12 +50,12 @@ class TabButton(tk.Button):
     def _on_enter(self):
         """Handle mouse enter."""
         if not self._is_active:
-            self.config(bg="#353535", fg="#ffffff")
+            self.config(bg="#353535", fg="#000000")
     
     def _on_leave(self):
         """Handle mouse leave."""
         if not self._is_active:
-            self.config(bg="#2d2d2d", fg="#b0b0b0")
+            self.config(bg="#2d2d2d", fg="#000000")
     
     def set_active(self, active: bool):
         """Set active state."""
@@ -70,7 +70,7 @@ class TabButton(tk.Button):
         else:
             self.config(
                 bg="#2d2d2d",
-                fg="#b0b0b0",
+                fg="#000000",
                 relief=tk.FLAT,
                 font=self._btn_font
             )

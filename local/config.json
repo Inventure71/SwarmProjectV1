@@ -33,5 +33,11 @@
     "backend_host": "10.205.10.254",
     "backend_port": 9998,
     "state_broadcast_hz": 20
+  },
+  "CANVAS_CONFIG": {
+    "default_zoom": 1.0,
+    "min_zoom": 0.2,
+    "max_zoom": 5.0,
+    "zoom_step": 0.1
   }
 }

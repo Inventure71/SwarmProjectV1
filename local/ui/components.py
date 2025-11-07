@@ -29,13 +29,13 @@ class ModernButton(tk.Button):
                 "disabledforeground": "#666666"
             },
             "danger": {
-                "bg": "#ef5350", "fg": "#ffffff",
-                "activebackground": "#e53935", "activeforeground": "#ffffff",
+                "bg": "#ef5350", "fg": "#000000",
+                "activebackground": "#e53935", "activeforeground": "#000000",
                 "disabledforeground": "#666666"
             },
             "secondary": {
-                "bg": "#424242", "fg": "#ffffff",
-                "activebackground": "#616161", "activeforeground": "#ffffff",
+                "bg": "#424242", "fg": "#000000",
+                "activebackground": "#616161", "activeforeground": "#000000",
                 "disabledforeground": "#666666"
             }
         }
@@ -52,30 +52,97 @@ class ModernButton(tk.Button):
             highlightthickness=0, **style_config
         )
         
-        # Add hover effect
+        # Ensure foreground is always black initially
+        self.config(fg="#000000", activeforeground="#000000")
+        
+        # Add hover effect and event bindings
         self._bind_hover()
+        self._bind_click_events()
     
     def _bind_hover(self):
         """Add hover effects."""
         self._original_bg = self.cget('bg')
-        self._original_fg = self.cget('fg')
+        # Always use black for foreground
+        self._original_fg = "#000000"
         
         def on_enter(e):
             if self.cget('state') != 'disabled':
-                self.config(bg=self._styles[self._current_style].get('activebackground', self._original_bg))
+                self.config(
+                    bg=self._styles[self._current_style].get('activebackground', self._original_bg),
+                    fg="#000000",  # Always black text on hover
+                    activeforeground="#000000"
+                )
         
         def on_leave(e):
             if self.cget('state') != 'disabled':
-                self.config(bg=self._original_bg)
+                self.config(
+                    bg=self._original_bg,
+                    fg="#000000",  # Always black text when not hovered
+                    activeforeground="#000000"
+                )
         
         self.bind("<Enter>", on_enter)
         self.bind("<Leave>", on_leave)
     
+    def _bind_click_events(self):
+        """Bind click and focus events to maintain black text."""
+        def ensure_black_text():
+            """Helper to ensure text is always black."""
+            if self.cget('state') != 'disabled':
+                current_fg = self.cget('fg')
+                if current_fg != "#000000":
+                    self.config(fg="#000000", activeforeground="#000000")
+        
+        def on_button_press(e):
+            """Ensure black text when button is pressed."""
+            ensure_black_text()
+        
+        def on_button_release(e):
+            """Ensure black text when button is released."""
+            ensure_black_text()
+            # Also check after a short delay to catch any delayed color changes
+            self.after(10, ensure_black_text)
+        
+        def on_focus_in(e):
+            """Ensure black text when button gains focus."""
+            ensure_black_text()
+        
+        def on_focus_out(e):
+            """Ensure black text when button loses focus."""
+            ensure_black_text()
+            # Check again after focus loss to catch any delayed changes
+            self.after(10, ensure_black_text)
+        
+        self.bind("<Button-1>", on_button_press)
+        self.bind("<ButtonRelease-1>", on_button_release)
+        self.bind("<FocusIn>", on_focus_in)
+        self.bind("<FocusOut>", on_focus_out)
+        
+        # Also bind to mouse leave/enter to catch any color changes
+        self.bind("<Enter>", lambda e: ensure_black_text(), add="+")
+        self.bind("<Leave>", lambda e: ensure_black_text(), add="+")
+        
+        # Periodically check and fix text color (as a safety net)
+        self._schedule_color_check()
+    
+    def _schedule_color_check(self):
+        """Periodically check and fix button text color."""
+        try:
+            if self.winfo_exists() and self.cget('state') != 'disabled':
+                current_fg = self.cget('fg')
+                if current_fg and current_fg != "#000000" and current_fg != "#666666":  # Allow disabled gray
+                    self.config(fg="#000000", activeforeground="#000000")
+                # Check again after 500ms (less frequent to avoid performance issues)
+                self.after(500, self._schedule_color_check)
+        except:
+            # Widget destroyed, stop checking
+            pass
+    
     def set_custom_color(self, bg_color, fg_color=None):
         """Set custom background and foreground colors, updating hover effects."""
         self._original_bg = bg_color
-        if fg_color:
-            self._original_fg = fg_color
+        # Always use black text
+        self._original_fg = "#000000"
         # Calculate darker shade for hover (reduce brightness by ~15%)
         try:
             r = int(bg_color[1:3], 16)
@@ -89,15 +156,14 @@ class ModernButton(tk.Button):
             hover_bg = bg_color
         # Update style dict temporarily
         self._styles[self._current_style]['activebackground'] = hover_bg
-        # Apply colors - include disabled state colors
+        # Apply colors - always use black text
         config = {
             'bg': bg_color,
+            'fg': "#000000",  # Always black text
+            'activeforeground': "#000000",  # Always black text on hover/active
             'disabledbackground': bg_color,  # Show color even when disabled
+            'disabledforeground': "#666666"  # Gray when disabled
         }
-        if fg_color:
-            config['fg'] = fg_color
-            config['activeforeground'] = fg_color
-            config['disabledforeground'] = fg_color  # Show text color even when disabled
         super().configure(**config)
         # Force update to ensure colors are applied
         self.update_idletasks()
@@ -107,7 +173,10 @@ class ModernButton(tk.Button):
         if style not in self._styles:
             style = "secondary"
         self._current_style = style
-        style_config = self._styles[style]
+        style_config = dict(self._styles[style])
+        # Ensure foreground is always black
+        style_config["fg"] = "#000000"
+        style_config["activeforeground"] = "#000000"
         super().configure(**style_config)
 
     def configure(self, cnf=None, **kwargs):
@@ -116,6 +185,19 @@ class ModernButton(tk.Button):
             style = cnf.pop('style')
         if 'style' in kwargs:
             style = kwargs.pop('style')
+        
+        # Always ensure foreground is black unless explicitly overridden
+        if cnf and isinstance(cnf, dict):
+            if 'fg' not in cnf and 'foreground' not in cnf:
+                cnf['fg'] = "#000000"
+            if 'activeforeground' not in cnf:
+                cnf['activeforeground'] = "#000000"
+        else:
+            if 'fg' not in kwargs and 'foreground' not in kwargs:
+                kwargs['fg'] = "#000000"
+            if 'activeforeground' not in kwargs:
+                kwargs['activeforeground'] = "#000000"
+        
         result = super().configure(cnf, **kwargs)
         if style is not None:
             self.set_style(style)
@@ -199,35 +281,38 @@ class ModernCheckbutton(tk.Checkbutton):
 
 
 class CanvasGrid:
-    """Helper class for drawing modern grids on canvas."""
+    """Helper class for drawing modern grids on canvas with zoom/pan support."""
     
-    def __init__(self, canvas, scale=100, width=700, height=700):
+    def __init__(self, canvas, scale=100, width=700, height=700, coordinate_converter=None):
         self.canvas = canvas
         self.scale = scale
         self.width = width
         self.height = height
+        self.coordinate_converter = coordinate_converter
     
     def draw_grid(self):
-        """Draw modern grid on canvas with enhanced styling."""
+        """Draw modern grid on canvas with enhanced styling and zoom/pan support."""
+        # Clear old grid
+        self.canvas.delete('grid')
+        self.canvas.delete('origin')
+        
+        if self.coordinate_converter is None:
+            self._draw_simple_grid()
+        else:
+            self._draw_transformed_grid()
+    
+    def _draw_simple_grid(self):
+        """Draw simple grid without transformation (fallback)."""
         # Grid lines with better colors
         for i in range(0, self.width + 1, self.scale):
             color = '#1a1a1a' if i % (self.scale * 2) != 0 else '#2a2a2a'
             width = 1 if i % (self.scale * 2) != 0 else 2
             self.canvas.create_line(i, 0, i, self.height, fill=color, width=width, tags='grid')
-            if i % self.scale == 0:
-                self.canvas.create_text(
-                    i, self.height - 12,
-                    text=f"{i//self.scale}m", fill='#555', font=('Segoe UI', 8)
-                )
         
         for i in range(0, self.height + 1, self.scale):
             color = '#1a1a1a' if i % (self.scale * 2) != 0 else '#2a2a2a'
             width = 1 if i % (self.scale * 2) != 0 else 2
             self.canvas.create_line(0, i, self.width, i, fill=color, width=width, tags='grid')
-            if i % self.scale == 0:
-                self.canvas.create_text(
-                    12, i, text=f"{i//self.scale}m", fill='#555', font=('Segoe UI', 8)
-                )
         
         # Enhanced origin marker
         center_x, center_y = self.width//2, self.height//2
@@ -240,3 +325,88 @@ class CanvasGrid:
             center_x, center_y - 20,
             text="ORIGIN", fill='#00d4aa', font=('Segoe UI', 9, 'bold'), tags='origin'
         )
+    
+    def _draw_transformed_grid(self):
+        """Draw grid with zoom and pan transformation."""
+        zoom = self.coordinate_converter.zoom
+        
+        # Calculate grid spacing in world coordinates (meters)
+        grid_spacing_meters = 1.0  # 1 meter
+        
+        # Determine visible area in world coordinates
+        top_left_world = self.coordinate_converter.canvas_to_world(0, 0)
+        bottom_right_world = self.coordinate_converter.canvas_to_world(self.width, self.height)
+        
+        min_x_world = min(top_left_world[0], bottom_right_world[0])
+        max_x_world = max(top_left_world[0], bottom_right_world[0])
+        min_y_world = min(top_left_world[1], bottom_right_world[1])
+        max_y_world = max(top_left_world[1], bottom_right_world[1])
+        
+        # Extend range slightly to ensure coverage
+        min_x_world -= 2
+        max_x_world += 2
+        min_y_world -= 2
+        max_y_world += 2
+        
+        # Draw vertical grid lines
+        x_world = int(min_x_world / grid_spacing_meters) * grid_spacing_meters
+        while x_world <= max_x_world:
+            x_canvas, _ = self.coordinate_converter.world_to_canvas(x_world, 0)
+            
+            # Determine line style
+            is_major = abs(x_world) < 0.01 or abs(x_world % 2.0) < 0.01
+            color = '#2a2a2a' if is_major else '#1a1a1a'
+            width = 2 if is_major else 1
+            
+            self.canvas.create_line(x_canvas, 0, x_canvas, self.height, 
+                                   fill=color, width=width, tags='grid')
+            
+            # Add labels for major lines if zoom is reasonable
+            if is_major and zoom > 0.3:
+                self.canvas.create_text(
+                    x_canvas, self.height - 12,
+                    text=f"{int(x_world)}m", fill='#555', font=('Segoe UI', 8),
+                    tags='grid'
+                )
+            
+            x_world += grid_spacing_meters
+        
+        # Draw horizontal grid lines
+        y_world = int(min_y_world / grid_spacing_meters) * grid_spacing_meters
+        while y_world <= max_y_world:
+            _, y_canvas = self.coordinate_converter.world_to_canvas(0, y_world)
+            
+            # Determine line style
+            is_major = abs(y_world) < 0.01 or abs(y_world % 2.0) < 0.01
+            color = '#2a2a2a' if is_major else '#1a1a1a'
+            width = 2 if is_major else 1
+            
+            self.canvas.create_line(0, y_canvas, self.width, y_canvas,
+                                   fill=color, width=width, tags='grid')
+            
+            # Add labels for major lines if zoom is reasonable
+            if is_major and zoom > 0.3:
+                self.canvas.create_text(
+                    12, y_canvas,
+                    text=f"{int(y_world)}m", fill='#555', font=('Segoe UI', 8),
+                    tags='grid'
+                )
+            
+            y_world += grid_spacing_meters
+        
+        # Draw origin marker
+        origin_x, origin_y = self.coordinate_converter.world_to_canvas(0, 0)
+        
+        # Only draw origin if it's visible
+        if 0 <= origin_x <= self.width and 0 <= origin_y <= self.height:
+            marker_size = max(8, min(16, int(8 * zoom)))
+            self.canvas.create_oval(
+                origin_x - marker_size, origin_y - marker_size,
+                origin_x + marker_size, origin_y + marker_size,
+                fill='#00d4aa', outline='#ffffff', width=2, tags='origin'
+            )
+            if zoom > 0.5:
+                self.canvas.create_text(
+                    origin_x, origin_y - marker_size - 12,
+                    text="ORIGIN", fill='#00d4aa', font=('Segoe UI', 9, 'bold'), tags='origin'
+                )
