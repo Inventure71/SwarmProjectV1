@@ -60,7 +60,7 @@ class Robot:
         
         # Reference to ROS controller (set externally)
         self._ros_controller: Optional[object] = None
-        
+
         # Battery state (updated by BatteryTracker)
         self.battery_voltage: Optional[float] = None
         self.battery_percentage: Optional[float] = None
