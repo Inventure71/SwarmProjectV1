@@ -14,6 +14,13 @@
       "cmd_vel_topic": "/philip/cmd_vel",
       "color": "#ea2e57"
     },
+    "agamemnon": {
+      "name": "agamemnon",
+      "type": "real",
+      "umh_id": "umh_3",
+      "cmd_vel_topic": "/agamemnon/cmd_vel",
+      "color": "#2e8eea"
+    },
     "dummy_1": {
       "name": "dummy_1",
       "umh_id": null,

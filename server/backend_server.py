@@ -24,6 +24,7 @@ else:
 from ros.ros_controller import ROSController
 from ros.ros_tracker import PoseState, ROSTracker
 from net.udp_server import UDPServer
+from net.udp_broadcaster import UDPBroadcaster
 from core.config_loader import load_config
 from core.robot import Robot, create_robot
 from trackers.battery_tracker import BatteryTracker
@@ -83,6 +84,12 @@ class BackendServer:
             handler=self._handle_message,
             client_ttl=hydra_cfg.get("client_ttl", 30.0),
         )
+        
+        # Initialize UDP broadcaster for pre-configured clients
+        clients_config = self.config_loader.get_config().get("CLIENTS_CONFIG", {})
+        client_ips = clients_config.get("ips", [])
+        print(f"[Backend] Initializing UDP broadcaster with {client_ips} client IPs")
+        self.udp_broadcaster = UDPBroadcaster(client_ips) if client_ips else None
 
         self.parameters = dict(DEFAULT_PARAMETERS)
         self.robots: Dict[str, Robot] = {}
@@ -116,6 +123,8 @@ class BackendServer:
             self._broadcast_thread.join(timeout=1.5)
 
         self.udp_server.stop()
+        if self.udp_broadcaster:
+            self.udp_broadcaster.close()
         self.controller.shutdown()
         self.tracker.shutdown()
         self.battery_tracker.shutdown()
@@ -332,6 +341,7 @@ class BackendServer:
                     if state:
                         follower_states[name] = state
 
+            # Broadcast to traditional UDP clients (local UI)
             self.udp_server.broadcast({"type": "robot_states", "data": robot_states})
 
             if follower_states:
@@ -344,6 +354,33 @@ class BackendServer:
                 "connected_clients": len(self.udp_server.get_connected_clients()),
             }
             self.udp_server.broadcast({"type": "connection_status", "data": connection_status})
+            
+            # Also send per-robot state to pre-configured clients via broadcaster
+            if self.udp_broadcaster:
+                for name, robot in robots_snapshot.items():
+                    robot_config = self.config_loader.get_robot_by_name(name)
+                    if robot_config:
+                        client_port = robot_config.get("client_port", 0)
+                        if client_port > 0:
+                            # Send individual robot state
+                            individual_state = {
+                                "type": "robot_state",
+                                "data": {
+                                    "robot": name,
+                                    "x": robot_states[name]["x"],
+                                    "y": robot_states[name]["y"],
+                                    "yaw": robot_states[name]["yaw"],
+                                    "type": robot_states[name]["type"],
+                                    "is_following": robot_states[name]["is_following"],
+                                    "battery": robot_states[name]["battery"],
+                                    "imu": robot_states[name]["imu"],
+                                }
+                            }
+                            # Add path following state if exists
+                            if name in follower_states:
+                                individual_state["data"]["path_following"] = follower_states[name]
+                            
+                            self.udp_broadcaster.send_robot_state(name, client_port, individual_state)
 
             elapsed = time.time() - start
             sleep_time = max(0.0, period - elapsed)
