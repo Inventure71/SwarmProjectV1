@@ -1,0 +1,47 @@
+{
+  "ROBOT_CONFIG": {
+    "menelao": {
+      "name": "menelao",
+      "type": "real",
+      "umh_id": "umh_4",
+      "client_port": 9700,
+      "cmd_vel_topic": "/menelao/cmd_vel"
+    },
+    "philip": {
+      "name": "philip",
+      "type": "real",
+      "umh_id": "umh_5",
+      "client_port": 9701,
+      "cmd_vel_topic": "/philip/cmd_vel"
+    },
+    "agamemnon": {
+      "name": "agamemnon",
+      "type": "real",
+      "umh_id": "umh_3",
+      "client_port": 9702,
+      "cmd_vel_topic": "/agamemnon/cmd_vel"
+    },
+    "dummy_1": {
+      "name": "dummy_1",
+      "umh_id": null,
+      "type": "dummy",
+      "client_port": 1,
+      "cmd_vel_topic": null
+    },
+    "dummy_2": {
+      "name": "dummy_2",
+      "umh_id": null,
+      "type": "dummy",
+      "client_port": 0,
+      "cmd_vel_topic": null
+    }
+  },
+  "HYDRA_CONFIG": {
+    "backend_host": "10.205.10.254",
+    "backend_port": 9998,
+    "state_broadcast_hz": 20
+  },
+  "CLIENTS_CONFIG": {
+    "ips": ["10.205.3.4", "10.205.3.17"]
+  }
+}
