@@ -76,6 +76,10 @@ class Robot:
         self.imu_orientation: Optional[Tuple[float, float, float, float]] = None
         self.imu_last_update: Optional[float] = None
 
+        # Range sensors (updated by RangeSensorsTracker)
+        self.range_sensors: Dict[str, float] = {}
+        self.range_last_update: Optional[float] = None
+
     def set_location(self, x, y, yaw=0):
         """
         Manually set the robot's location.
@@ -361,6 +365,30 @@ class Robot:
                 'angular_velocity': self.imu_angular_velocity,
                 'orientation': self.imu_orientation,
                 'last_update': self.imu_last_update,
+            }
+
+    def update_range_sensors(self, ranges: Dict[str, float]) -> None:
+        """
+        Update proximity/range sensors (called by RangeSensorsTracker).
+        Expects a mapping of sensor position keys (fl, fr, rl, rr) to values.
+        """
+        with self._lock:
+            self.range_sensors.update(ranges)
+            self.range_last_update = time.time()
+
+    def get_range_sensors(self) -> Optional[Dict[str, object]]:
+        """
+        Get range sensor readings in a thread-safe manner.
+
+        Returns:
+            Dictionary with sensor values and last update timestamp, or None if empty.
+        """
+        with self._lock:
+            if not self.range_sensors:
+                return None
+            return {
+                'values': dict(self.range_sensors),
+                'last_update': self.range_last_update,
             }
 
     def __repr__(self):

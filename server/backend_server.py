@@ -29,6 +29,7 @@ from core.config_loader import load_config
 from core.robot import Robot, create_robot
 from trackers.battery_tracker import BatteryTracker
 from trackers.imu_tracker import IMUTracker
+from trackers.range_tracker import RangeSensorsTracker
 
 
 DEFAULT_PARAMETERS = {
@@ -78,6 +79,7 @@ class BackendServer:
         )
         self.battery_tracker = BatteryTracker()
         self.imu_tracker = IMUTracker()
+        self.range_tracker = RangeSensorsTracker()
         self.udp_server = UDPServer(
             host=self.backend_host,
             port=self.backend_port,
@@ -129,6 +131,7 @@ class BackendServer:
         self.tracker.shutdown()
         self.battery_tracker.shutdown()
         self.imu_tracker.shutdown()
+        self.range_tracker.shutdown()
 
         with self._state_lock:
             for robot in self.robots.values():
@@ -166,6 +169,7 @@ class BackendServer:
             self.controller.register_robot(name, config)
             self.battery_tracker.register_robot(name, robot, config)
             self.imu_tracker.register_robot(name, robot, config)
+            self.range_tracker.register_robot(name, robot, config)
 
         if persist:
             self.config_loader.upsert_robot(name, config)
@@ -181,6 +185,7 @@ class BackendServer:
         self.controller.remove_robot(name)
         self.battery_tracker.remove_robot(name)
         self.imu_tracker.remove_robot(name)
+        self.range_tracker.remove_robot(name)
         if persist:
             self.config_loader.remove_robot(name)
 
@@ -326,6 +331,7 @@ class BackendServer:
                 x, y, yaw = robot.get_position()
                 battery = robot.get_battery_state()
                 imu = robot.get_imu_state()
+                ranges = robot.get_range_sensors()
                 robot_states[name] = {
                     "x": x,
                     "y": y,
@@ -334,6 +340,7 @@ class BackendServer:
                     "is_following": robot.is_following_path(),
                     "battery": battery,
                     "imu": imu,
+                    "ranges": ranges,
                 }
                 
                 if robot.is_following_path():
@@ -363,6 +370,7 @@ class BackendServer:
                         client_port = robot_config.get("client_port", 0)
                         if client_port > 0:
                             # Send individual robot state
+                            """OLD
                             individual_state = {
                                 "type": "robot_state",
                                 "data": {
@@ -376,11 +384,66 @@ class BackendServer:
                                     "imu": robot_states[name]["imu"],
                                 }
                             }
-                            # Add path following state if exists
+                            extended_individual_state = { # so we just send the data in simple blocks
+                                "robot": name,
+                                "x": robot_states[name]["x"],
+                                "y": robot_states[name]["y"],
+                                "yaw": robot_states[name]["yaw"],
+                                "type": robot_states[name]["type"],
+                                "is_following": robot_states[name]["is_following"],
+                                "battery": robot_states[name]["battery"],
+                                "imu": robot_states[name]["imu"], 
+                                "path_following": path_following,
+                            }
+                            """
+                            """NEW""" #TODO: testing if this works  
+                            path_following = []                          # Add path following state if exists
                             if name in follower_states:
-                                individual_state["data"]["path_following"] = follower_states[name]
+                                path_following = follower_states[name]
+                            else:
+                                path_following = []                            
                             
+                            # Flatten to single-value fields only (receiver cannot handle nested data)
+                            battery = robot_states[name]["battery"] or {}
+                            battery_pct = None
+                            if isinstance(battery, dict):
+                                battery_pct = battery.get("percentage")
+
+                            imu = robot_states[name]["imu"] or {}
+                            imu_yaw = None
+                            if isinstance(imu, dict):
+                                # Use orientation yaw if present, otherwise leave None
+                                orientation = imu.get("orientation")
+                                if isinstance(orientation, (list, tuple)) and len(orientation) >= 3:
+                                    imu_yaw = orientation[2]
+
+                            ranges = robot_states[name]["ranges"] or {}
+                            range_values = ranges.get("values") if isinstance(ranges, dict) else {}
+                            fl = fr = rl = rr = None
+                            if isinstance(range_values, dict):
+                                fl = range_values.get("fl")
+                                fr = range_values.get("fr")
+                                rl = range_values.get("rl")
+                                rr = range_values.get("rr")
+
+                            path_following_active = bool(path_following)  # reduce to simple flag
+
+                            # Ordered scalar payload expected by the broadcaster consumer
+                            individual_state = [
+                                name,                               # robot id
+                                robot_states[name]["x"],            # x
+                                robot_states[name]["y"],            # y
+                                robot_states[name]["yaw"],          # yaw
+                                robot_states[name]["type"],         # type
+                                robot_states[name]["is_following"], # following flag
+                                battery_pct,                        # battery percentage only
+                                imu_yaw,                            # imu yaw if available
+                                fl, fr, rl, rr,                     # range sensors
+                                path_following_active,              # simple path-following indicator
+                            ]
                             self.udp_broadcaster.send_robot_state(name, client_port, individual_state)
+
+                            #self.udp_broadcaster.send_robot_state(name, client_port, individual_state)
 
             elapsed = time.time() - start
             sleep_time = max(0.0, period - elapsed)

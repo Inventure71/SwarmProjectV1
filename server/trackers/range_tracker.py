@@ -59,7 +59,7 @@ class RangeSensorsTracker(BaseTracker):
         # Subscribe to all 4 range sensors
         sensors = ["fl", "fr", "rl", "rr"]
         for sensor in sensors:
-            topic = f"/{robot_name_config}/range/{sensor}"
+            topic = self._build_sensor_topic(robot_config, sensor)
             callback = self._make_callback(robot_name, sensor)
             subscriber = rospy.Subscriber(
                 topic,
@@ -101,4 +101,27 @@ class RangeSensorsTracker(BaseTracker):
         with self._lock:
             self._robots.pop(robot_name, None)
             self._range_data.pop(robot_name, None)
+
+    @staticmethod
+    def _build_sensor_topic(robot_config: Dict, sensor: str) -> str:
+        """
+        Build topic name for a specific range sensor.
+        Order of precedence:
+        1) Explicit mapping in robot_config['range_topics'][sensor]
+        2) robot_config['range_topic_prefix'] (e.g., '/robot1')
+        3) robot name as namespace (e.g., '/robot1/range/fl')
+        4) Global fallback '/range/fl'
+        """
+        range_topics = robot_config.get("range_topics", {})
+        if isinstance(range_topics, dict):
+            topic_override = range_topics.get(sensor)
+            if topic_override:
+                return topic_override
+
+        prefix = robot_config.get("range_topic_prefix") or robot_config.get("name")
+        if prefix:
+            cleaned = prefix.rstrip("/")
+            return f"/{cleaned}/range/{sensor}"
+
+        return f"/range/{sensor}"
 
