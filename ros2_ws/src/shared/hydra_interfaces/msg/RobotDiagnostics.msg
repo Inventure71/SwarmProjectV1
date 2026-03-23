@@ -1,0 +1,15 @@
+string robot_name
+string pose_topic
+string battery_topic
+string imu_topic
+string odometry_topic
+string ranges_topic_prefix
+float64 last_pose_age_sec
+float64 last_heartbeat_age_sec
+bool has_battery
+bool has_imu
+bool has_ranges
+bool has_path
+string mode
+string fault_reason
+builtin_interfaces/Time stamp

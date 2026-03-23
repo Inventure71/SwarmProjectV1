@@ -31,9 +31,9 @@ class ConfigLoader:
     def _load_config(self):
         """Load configuration from config.json file."""
         current_file = Path(__file__).resolve()
-        # Look for config.json in the local directory (parent of core)
         local_dir = current_file.parent.parent
-        config_path = local_dir / "config.json"
+        shared_config_path = local_dir.parent / "config" / "fleet.json"
+        config_path = shared_config_path if shared_config_path.exists() else local_dir / "config.json"
 
         if not config_path.exists():
             raise FileNotFoundError(f"Config file not found at {config_path}")
@@ -173,20 +173,21 @@ class ConfigLoader:
 
     def get_hydra_config(self):
         """
-        Get Hydra backend configuration.
+        Get Hydra supervisor bridge configuration.
 
         Returns:
             dict: Hydra configuration dictionary.
         """
         return ConfigLoader._config.get('HYDRA_CONFIG', {})
 
-    def get_backend_endpoint(self) -> Tuple[str, int]:
-        """Get backend host and port tuple for convenience."""
+    def get_supervisor_endpoint(self) -> Tuple[str, int]:
+        """Get supervisor bridge host and port tuple for convenience."""
         hydra_cfg = self.get_hydra_config()
         return (
-            hydra_cfg.get('backend_host', 'localhost'),
-            int(hydra_cfg.get('backend_port', 9998)),
+            hydra_cfg.get('supervisor_host', 'localhost'),
+            int(hydra_cfg.get('supervisor_port', 9998)),
         )
+
 
     def get_pose_topic(self, robot_name: str) -> Optional[str]:
         """Compute pose topic for a robot from its UMH identifier."""
@@ -241,4 +242,3 @@ def load_config():
         ConfigLoader: Configuration loader instance
     """
     return ConfigLoader()
-

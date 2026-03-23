@@ -1,0 +1,8 @@
+string robot_name
+bool active
+int32 waypoint_index
+int32 total_waypoints
+float64 distance_to_target
+float64 throttle
+string completion_reason
+builtin_interfaces/Time stamp

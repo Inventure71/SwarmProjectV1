@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
 Command Sender
-Handles sending commands to the backend.
+Handles sending commands to the supervisor bridge.
 """
 
 from typing import List, Tuple
 
 
 class CommandSender:
-    """Sends commands to the backend server."""
+    """Sends commands to the supervisor bridge."""
     
     def __init__(self, udp_client):
         self.udp_client = udp_client
     
     def push_path_to_backend(self, robot_name: str, waypoints: List[Tuple[float, float]]) -> None:
-        """Send path waypoints to backend."""
+        """Send path waypoints to the supervisor bridge."""
         payload = {
             "type": "set_path",
             "data": {
@@ -25,7 +25,7 @@ class CommandSender:
         self.udp_client.send(payload)
     
     def send_racing_config(self, robot_name: str, racing_config) -> None:
-        """Send racing configuration to backend."""
+        """Send racing configuration to the supervisor bridge."""
         payload = {
             "type": "set_racing_config",
             "data": {
@@ -62,7 +62,7 @@ class CommandSender:
         self.udp_client.send({"type": "emergency_stop", "data": {}})
     
     def sync_parameters(self, params: dict) -> None:
-        """Sync control parameters with backend."""
+        """Sync control parameters with the supervisor bridge."""
         payload = {"type": "set_parameters", "data": params}
         self.udp_client.send(payload)
     
@@ -70,4 +70,3 @@ class CommandSender:
         """Add a new robot."""
         payload = {"type": "add_robot", "data": robot_config}
         self.udp_client.send(payload)
-

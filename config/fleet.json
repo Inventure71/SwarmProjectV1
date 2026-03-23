@@ -1,0 +1,221 @@
+{
+  "ROBOT_CONFIG": {
+    "hypnos": {
+      "name": "hypnos",
+      "ip": "hypnos",
+      "namespace": "/hypnos",
+      "type": "real",
+      "umh_id": "umh_2",
+      "pose_topic": "/umh_2/pose",
+      "cmd_vel_topic": "/cmd_vel",
+      "cmd_vel_msg_type": "twist_stamped",
+      "battery_topic": "/battery",
+      "imu_topic": "/imu_broadcaster/imu",
+      "odometry_topic": "/odometry/filtered",
+      "range_topics": {
+        "fl": "/range/fl",
+        "fr": "/range/fr",
+        "rl": "/range/rl",
+        "rr": "/range/rr"
+      },
+      "color": "#2eead4",
+      "client_port": 9700,
+      "max_linear": 0.5,
+      "max_angular": 1.5
+    },
+    "persephone": {
+      "name": "persephone",
+      "ip": "persephone",
+      "namespace": "/persephone",
+      "type": "real",
+      "umh_id": "umh_3",
+      "pose_topic": "/umh_3/pose",
+      "cmd_vel_topic": "/cmd_vel",
+      "cmd_vel_msg_type": "twist_stamped",
+      "battery_topic": "/battery",
+      "imu_topic": "/imu_broadcaster/imu",
+      "odometry_topic": "/odometry/filtered",
+      "range_topics": {
+        "fl": "/range/fl",
+        "fr": "/range/fr",
+        "rl": "/range/rl",
+        "rr": "/range/rr"
+      },
+      "color": "#3e3e3e",
+      "client_port": 9701,
+      "max_linear": 0.5,
+      "max_angular": 1.5
+    },
+    "icarus": {
+      "name": "icarus",
+      "ip": "icarus",
+      "namespace": "/icarus",
+      "type": "real",
+      "umh_id": "umh_4_green",
+      "pose_topic": "/umh_4_green/pose",
+      "cmd_vel_topic": "/cmd_vel",
+      "cmd_vel_msg_type": "twist_stamped",
+      "battery_topic": "/battery",
+      "imu_topic": "/imu_broadcaster/imu",
+      "odometry_topic": "/odometry/filtered",
+      "range_topics": {
+        "fl": "/range/fl",
+        "fr": "/range/fr",
+        "rl": "/range/rl",
+        "rr": "/range/rr"
+      },
+      "color": "#6e6e6e",
+      "client_port": 9702,
+      "max_linear": 0.5,
+      "max_angular": 1.5
+    },
+    "daemon": {
+      "name": "daemon",
+      "ip": "daemon",
+      "namespace": "/daemon",
+      "type": "real",
+      "umh_id": "umh_5",
+      "pose_topic": "/umh_5/pose",
+      "cmd_vel_topic": "/cmd_vel",
+      "cmd_vel_msg_type": "twist_stamped",
+      "battery_topic": "/battery",
+      "imu_topic": "/imu_broadcaster/imu",
+      "odometry_topic": "/odometry/filtered",
+      "range_topics": {
+        "fl": "/range/fl",
+        "fr": "/range/fr",
+        "rl": "/range/rl",
+        "rr": "/range/rr"
+      },
+      "color": "#2e2e2e",
+      "client_port": 9703,
+      "max_linear": 0.5,
+      "max_angular": 1.5
+    },
+    "heracles": {
+      "name": "heracles",
+      "ip": "heracles",
+      "namespace": "/heracles",
+      "type": "real",
+      "umh_id": "umh_4",
+      "pose_topic": "/umh_4/pose",
+      "cmd_vel_topic": "/cmd_vel",
+      "cmd_vel_msg_type": "twist_stamped",
+      "battery_topic": "/battery",
+      "imu_topic": "/imu_broadcaster/imu",
+      "odometry_topic": "/odometry/filtered",
+      "range_topics": {
+        "fl": "/range/fl",
+        "fr": "/range/fr",
+        "rl": "/range/rl",
+        "rr": "/range/rr"
+      },
+      "color": "#2e2e2e",
+      "client_port": 9704,
+      "max_linear": 0.5,
+      "max_angular": 1.5
+    },
+    "theseus": {
+      "name": "theseus",
+      "ip": "theseus",
+      "namespace": "/theseus",
+      "type": "real",
+      "umh_id": "umh_can",
+      "pose_topic": "/umh_can/pose",
+      "cmd_vel_topic": "/cmd_vel",
+      "cmd_vel_msg_type": "twist_stamped",
+      "battery_topic": "/battery",
+      "imu_topic": "/imu_broadcaster/imu",
+      "odometry_topic": "/odometry/filtered",
+      "range_topics": {
+        "fl": "/range/fl",
+        "fr": "/range/fr",
+        "rl": "/range/rl",
+        "rr": "/range/rr"
+      },
+      "color": "#c2c2c2",
+      "client_port": 9705,
+      "max_linear": 0.5,
+      "max_angular": 1.5
+    },
+    "dummy_1": {
+      "name": "dummy_1",
+      "ip": null,
+      "namespace": "/dummy_1",
+      "type": "dummy",
+      "umh_id": null,
+      "cmd_vel_topic": "/dummy_1/cmd_vel",
+      "color": "#eaaa2e",
+      "client_port": 0,
+      "max_linear": 0.5,
+      "max_angular": 1.5
+    },
+    "dummy_2": {
+      "name": "dummy_2",
+      "ip": null,
+      "namespace": "/dummy_2",
+      "type": "dummy",
+      "umh_id": null,
+      "cmd_vel_topic": "/dummy_2/cmd_vel",
+      "color": "#742eea",
+      "client_port": 0,
+      "max_linear": 0.5,
+      "max_angular": 1.5
+    }
+  },
+  "HYDRA_CONFIG": {
+    "supervisor_host": "10.205.3.113",
+    "supervisor_port": 9998,
+    "state_broadcast_hz": 20,
+    "status_publish_hz": 10,
+    "path_control_hz": 20,
+    "pose_stale_timeout_sec": 0.5,
+    "manual_timeout_sec": 0.25,
+    "supervisor_heartbeat_timeout_sec": 1.0,
+    "supervisor_heartbeat_hz": 2.0,
+    "default_max_linear": 0.5,
+    "default_max_angular": 1.5
+  },
+  "CANVAS_CONFIG": {
+    "default_zoom": 1.0,
+    "min_zoom": 0.2,
+    "max_zoom": 5.0,
+    "zoom_step": 0.1
+  },
+  "CLIENTS_CONFIG": {
+    "ips": [
+      "10.205.3.3",
+      "10.205.3.4",
+      "10.205.3.17"
+    ]
+  },
+  "DEPLOYMENT_CONFIG": {
+    "server": {
+      "enabled": true,
+      "host": "10.205.3.113",
+      "user": "hermes",
+      "ros_setup": "/home/hermes/ros2_jazzy/install/setup.bash",
+      "remote_root": "/home/hermes/hydra",
+      "run_after_deploy": true
+    },
+    "robots": {
+      "defaults": {
+        "user": "husarion",
+        "ros_setup": "/opt/ros/jazzy/setup.bash",
+        "remote_root": "/home/husarion/hydra",
+        "run_after_deploy": true
+      },
+      "devices": {
+        "hypnos": {
+          "enabled": true
+        }
+      }
+    },
+    "ui": {
+      "enabled": false,
+      "mode": "local",
+      "python": "python3",
+      "background": false
+    }
+  }
+}

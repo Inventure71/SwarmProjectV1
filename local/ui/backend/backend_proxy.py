@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Backend Controller Proxy
-Handles communication with the backend server.
+Handles communication with the supervisor bridge.
 """
 
 from typing import Optional
 
 
 class BackendControllerProxy:
-    """Proxy that forwards control commands to the backend via UDP."""
+    """Proxy that forwards control commands to the supervisor bridge via UDP."""
 
     def __init__(self, udp_client):
         self._udp_client = udp_client
@@ -16,7 +16,7 @@ class BackendControllerProxy:
 
     @property
     def connected(self) -> bool:
-        """Check if connected to backend."""
+        """Check if connected to the supervisor bridge."""
         status = self._udp_client.get_connection_status()
         if not status:
             return False
@@ -58,4 +58,3 @@ class RobotStateProxy:
     def set_location(self, x: float, y: float, yaw: float = 0.0) -> None:
         """Set robot position in app state."""
         self._app.state.set_robot_position(self.username, x, y, yaw)
-

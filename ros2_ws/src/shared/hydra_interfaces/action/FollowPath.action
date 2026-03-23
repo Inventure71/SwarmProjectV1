@@ -1,0 +1,13 @@
+geometry_msgs/Pose2D[] waypoints
+bool loop
+float32 speed_multiplier
+float32 lateral_offset
+---
+bool success
+string completion_reason
+---
+int32 waypoint_index
+int32 total_waypoints
+float64 distance_to_target
+float64 throttle
+string mode

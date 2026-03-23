@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
 Backend Message Handler
-Processes messages received from the backend.
+Processes messages received from the supervisor bridge.
 """
 
-from typing import Dict, Callable
-from tkinter import messagebox
+from typing import Callable, Dict, Optional
 
 
 class BackendMessageHandler:
-    """Handles messages received from the backend server."""
+    """Handles messages received from the supervisor bridge."""
     
-    def __init__(self, state):
+    def __init__(self, state, on_error: Optional[Callable[[str], None]] = None):
         self.state = state
+        self.on_error = on_error
     
     def handle_message(self, message: Dict) -> None:
-        """Process a message from the backend."""
+        """Process a message from the supervisor bridge."""
         msg_type = message.get("type")
         data = message.get("data", {})
         
@@ -26,5 +26,6 @@ class BackendMessageHandler:
         elif msg_type == "connection_status" and isinstance(data, dict):
             self.state.update_connection_status(data)
         elif msg_type == "error":
-            messagebox.showwarning("Backend", str(data.get("message", data)))
-
+            error_text = str(data.get("message", data))
+            if self.on_error:
+                self.on_error(error_text)

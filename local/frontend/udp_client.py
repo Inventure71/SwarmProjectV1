@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UDP client for communicating with the Hydra backend server."""
+"""UDP client for communicating with the Hydra supervisor bridge."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ class UDPClient:
             self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
             self._heartbeat_thread.start()
 
-        # Send hello to register with backend
+        # Send hello to register with the supervisor bridge
         self.send({"type": "hello", "data": {"timestamp": time.time()}})
 
     def close(self) -> None:
@@ -153,10 +153,10 @@ class UDPClient:
             sock.settimeout(self.socket_timeout)
             # Bind to any available port (0 = let OS choose)
             # Note: UDP requires binding to receive messages - this is not a "server",
-            # just a way to receive responses from the backend
+            # just a way to receive responses from the supervisor bridge
             sock.bind(('', 0))
             self._socket = sock
-            print(f"[UDPClient] Connected to backend at {self.host}:{self.port}")
+            print(f"[UDPClient] Connected to supervisor bridge at {self.host}:{self.port}")
         except Exception as exc:
             self._last_error = f"Failed to create socket: {exc}"
             print(f"[UDPClient] ERROR: {self._last_error}")
@@ -229,5 +229,4 @@ class UDPClient:
 
 
 __all__ = ["UDPClient"]
-
 

@@ -1,0 +1,6 @@
+float64 lateral_offset
+float64 speed_multiplier
+bool loop_path
+---
+bool success
+string message

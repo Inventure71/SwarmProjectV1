@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 import tkinter as tk
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from ui.tabs import DashboardTab, RobotsTab, PathPlanningTab, SettingsTab, Monit
 
 
 class RobotControllerApp:
-    """Frontend UI that communicates with the Hydra backend."""
+    """Frontend UI that communicates with the Hydra supervisor bridge."""
 
     def __init__(self) -> None:
         # Initialize state
@@ -48,6 +49,10 @@ class RobotControllerApp:
         
         # Wire up remaining UI components
         self._wire_ui_components()
+
+        # UI refresh throttling (avoid rebuilding large widgets every frame)
+        self._last_robot_list_refresh_s = 0.0
+        self._robot_list_refresh_interval_s = 0.5
         
         # Apply initial theming
         self.root.after(200, self._apply_active_robot_theme)
@@ -60,7 +65,7 @@ class RobotControllerApp:
         """Load configuration and initialize robots."""
         self.config_loader = load_config()
         robot_config = self.config_loader.get_robot_config()
-        hydra_host, hydra_port = self.config_loader.get_backend_endpoint()
+        hydra_host, hydra_port = self.config_loader.get_supervisor_endpoint()
 
         # Load canvas configuration
         canvas_config = self.config_loader.get_config().get("CANVAS_CONFIG", {})
@@ -69,11 +74,11 @@ class RobotControllerApp:
         self.state.max_zoom = canvas_config.get("max_zoom", 5.0)
         self.state.zoom_step = canvas_config.get("zoom_step", 0.1)
 
-        # Setup UDP client and backend proxy
-        self.udp_client = UDPClient(hydra_host, hydra_port, on_message=self._on_backend_message)
-        self.backend_controller = BackendControllerProxy(self.udp_client)
+        # Setup UDP client and supervisor proxy
+        self.udp_client = UDPClient(hydra_host, hydra_port, on_message=self._on_supervisor_message)
+        self.supervisor_controller = BackendControllerProxy(self.udp_client)
         self.command_sender = CommandSender(self.udp_client)
-        self.message_handler = BackendMessageHandler(self.state)
+        self.message_handler = None
 
         if not robot_config:
             raise RuntimeError("No robots defined in config.json")
@@ -87,11 +92,17 @@ class RobotControllerApp:
             self.state.robot_colors[name] = cfg.get("color", "#00aaff")
             self.state.set_robot_position(name, 0.0, 0.0, 0.0)
 
-        self.state.active_robot = next(iter(self.state.robots.keys()))
-        self.backend_controller.set_default_robot(self.state.active_robot)
+        real_robot_names = [
+            name for name, cfg in robot_config.items()
+            if cfg.get("type", "real") != "dummy"
+        ]
+        self.state.active_robot = real_robot_names[0] if real_robot_names else next(iter(self.state.robots.keys()))
+        self.supervisor_controller.set_default_robot(self.state.active_robot)
 
     def _setup_ui(self) -> None:
         """Setup main UI window."""
+        from tkinter import messagebox
+
         self.root = tk.Tk()
         self.root.title("🤖 Hydra Robot Swarm Controller")
         self.root.configure(bg="#0f0f0f")
@@ -112,6 +123,14 @@ class RobotControllerApp:
 
         # Create tabbed interface
         self.tabbed_ui = TabbedInterface(main_container, bg="#0f0f0f")
+
+        # Ensure supervisor error popups run on Tk's main thread.
+        self.message_handler = BackendMessageHandler(
+            self.state,
+            on_error=lambda text: self.root.after(
+                0, lambda: messagebox.showwarning("Supervisor", text)
+            ),
+        )
         
     def _setup_services(self) -> None:
         """Setup services."""
@@ -231,7 +250,7 @@ class RobotControllerApp:
         
         # Recording service
         self.recording_service = RecordingService(
-            self.backend_controller,
+            self.supervisor_controller,
             self,
             self.state.robots[self.state.active_robot],
             canvas,
@@ -303,19 +322,19 @@ class RobotControllerApp:
         self._update_robot_dropdown()
 
     # ------------------------------------------------------------------
-    # Backend communication & scheduling
+    # Supervisor communication & scheduling
     # ------------------------------------------------------------------
 
     def _auto_connect(self) -> None:
-        """Auto-connect to backend."""
+        """Auto-connect to supervisor bridge."""
         self._connect()
 
     def _connect(self) -> None:
-        """Connect to backend."""
-        self.dashboard_tab.status_label.config(text="🟡 Connecting to backend...", fg="#ffaa00")
+        """Connect to supervisor bridge."""
+        self.dashboard_tab.status_label.config(text="🟡 Connecting to supervisor...", fg="#ffaa00")
         self.root.update()
         self.udp_client.start()
-        self._sync_parameters_with_backend()
+        self._sync_parameters_with_supervisor()
         self.state.tracking_active = True
         self.dashboard_tab.emergency_btn.config(state=tk.NORMAL)
         self._update_position()
@@ -339,7 +358,7 @@ class RobotControllerApp:
                 text = f"🟡 Partial: {len(connected)}/{num_real} real, {num_dummy} dummy"
                 color = "#ffaa00"
         else:
-            text = "🔴 Backend offline"
+            text = "🔴 Supervisor offline"
             color = "#f44336"
         
         self.dashboard_tab.status_label.config(text=text, fg=color)
@@ -347,12 +366,13 @@ class RobotControllerApp:
         
         self.root.after(500, self._check_connection_status)
 
-    def _on_backend_message(self, message: dict) -> None:
-        """Handle message from backend."""
-        self.message_handler.handle_message(message)
+    def _on_supervisor_message(self, message: dict) -> None:
+        """Handle message from supervisor bridge."""
+        if self.message_handler is not None:
+            self.message_handler.handle_message(message)
 
-    def _sync_parameters_with_backend(self) -> None:
-        """Sync control parameters with backend."""
+    def _sync_parameters_with_supervisor(self) -> None:
+        """Sync control parameters with supervisor bridge."""
         params = {
             "use_prediction": self.state.use_prediction,
             "estimated_delay_ms": self.state.estimated_delay_ms,
@@ -473,7 +493,7 @@ class RobotControllerApp:
 
     def _on_setting_change(self, setting: str):
         """Handle settings change."""
-        self._sync_parameters_with_backend()
+        self._sync_parameters_with_supervisor()
     
     def _on_canvas_transform_change(self):
         """Handle canvas zoom/pan transform change."""
@@ -497,7 +517,7 @@ class RobotControllerApp:
     def _on_robot_change(self, robot_name: str) -> None:
         """Handle robot selection change."""
         self.state.active_robot = robot_name
-        self.backend_controller.set_default_robot(robot_name)
+        self.supervisor_controller.set_default_robot(robot_name)
         self.recording_service.robot = self.state.robots[robot_name]
         
         # Update config panel
@@ -506,7 +526,6 @@ class RobotControllerApp:
         
         # Update robot dropdown
         self.dashboard_tab.robot_var.set(robot_name)
-        self._update_robot_dropdown()
         
         self._apply_active_robot_theme()
         self._update_button_states()
@@ -525,9 +544,9 @@ class RobotControllerApp:
 
     def _toggle_recording(self) -> None:
         """Toggle recording."""
-        if not self.state.tracking_active or not self.backend_controller.connected:
+        if not self.state.tracking_active or not self.supervisor_controller.connected:
             from tkinter import messagebox
-            messagebox.showwarning("Recording", "Please connect to the backend first.")
+            messagebox.showwarning("Recording", "Please connect to the supervisor first.")
             return
         
         if self.recording_service.is_recording:
@@ -640,8 +659,11 @@ class RobotControllerApp:
         follower_states = self.state.get_follower_states()
         self.monitoring_tab.update_panels(self.state.robots, robot_states_dict, follower_states)
         
-        # Update robot list to show real-time battery updates
-        self.robots_tab.update_robot_list()
+        # Refresh expensive list widgets at a lower cadence to keep UI responsive.
+        now = time.monotonic()
+        if now - self._last_robot_list_refresh_s >= self._robot_list_refresh_interval_s:
+            self.robots_tab.update_robot_list()
+            self._last_robot_list_refresh_s = now
         
         # Process joystick if active
         if self.recording_service.joystick_control_active:

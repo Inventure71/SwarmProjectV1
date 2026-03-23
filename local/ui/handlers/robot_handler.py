@@ -29,6 +29,15 @@ class RobotHandler:
     
     def add_robot(self, name: str, umh_id: str, robot_type: str, app_instance):
         """Add a new robot to the system."""
+        messagebox.showwarning(
+            "Add Robot",
+            "Runtime add/remove is disabled in the ROS 2 architecture.\n"
+            "Update config/fleet.json and relaunch the supervisor/UI instead."
+        )
+        return False
+
+    def _legacy_add_robot(self, name: str, umh_id: str, robot_type: str, app_instance):
+        """Legacy add robot flow retained for reference."""
         if not name:
             messagebox.showwarning("Add Robot", "Please provide a robot name.")
             return False
@@ -48,11 +57,11 @@ class RobotHandler:
             "cmd_vel_topic": f"/{name}/cmd_vel" if robot_type == "real" else None,
         }
         
-        # Send to backend
+        # Legacy path kept only for reference.
         self.command_sender.add_robot(robot_config)
         ack = self.udp_client.wait_for_ack("add_robot", timeout=1.0)
         if not ack:
-            messagebox.showwarning("Add Robot", "No confirmation from backend. Robot may not have been added.")
+            messagebox.showwarning("Add Robot", "No confirmation from supervisor. Robot may not have been added.")
         
         # Update config
         self.config_loader.upsert_robot(name, robot_config)
@@ -69,4 +78,3 @@ class RobotHandler:
         
         messagebox.showinfo("Add Robot", f"Robot '{name}' added. Use set path to start tracking.")
         return True
-

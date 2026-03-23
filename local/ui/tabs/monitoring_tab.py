@@ -18,6 +18,7 @@ class RobotMonitorPanel:
         self.panel_id = panel_id
         self.frame = tk.Frame(parent, bg="#1e1e1e", relief=tk.RAISED, borderwidth=2)
         self.selected_robot = None
+        self._last_robot_values = ()
         self._setup_ui()
     
     def _setup_ui(self):
@@ -80,12 +81,15 @@ class RobotMonitorPanel:
     
     def update_robot_list(self, robots):
         """Update available robots in dropdown."""
-        current_values = list(robots.keys())
-        self.robot_selector['values'] = current_values
+        current_values = tuple(robots.keys())
+        if current_values != self._last_robot_values:
+            self.robot_selector['values'] = current_values
+            self._last_robot_values = current_values
+
         if self.selected_robot not in current_values and current_values:
             self.selected_robot = current_values[min(self.panel_id - 1, len(current_values) - 1)]
             self.robot_selector.set(self.selected_robot)
-        elif self.selected_robot:
+        elif self.selected_robot and self.robot_selector.get() != self.selected_robot:
             self.robot_selector.set(self.selected_robot)
     
     def update_info(self, position, battery, robot_type, is_following, follower_state, imu):
@@ -142,21 +146,29 @@ class RobotMonitorPanel:
             
             orientation = imu.get('orientation')
             if orientation:
-                x, y, z, w = orientation
-                siny_cosp = 2.0 * (w * z + x * y)
-                cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-                yaw = math.atan2(siny_cosp, cosy_cosp)
-                yaw_deg = math.degrees(yaw)
-                
-                sinp = 2.0 * (w * y - z * x)
-                if abs(sinp) >= 1:
-                    pitch = math.copysign(math.pi / 2, sinp)
+                # Bridge may provide either quaternion [x, y, z, w] or yaw-only [roll, pitch, yaw].
+                if isinstance(orientation, (list, tuple)) and len(orientation) == 4:
+                    x, y, z, w = orientation
+                    siny_cosp = 2.0 * (w * z + x * y)
+                    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+                    yaw = math.atan2(siny_cosp, cosy_cosp)
+                    yaw_deg = math.degrees(yaw)
+
+                    sinp = 2.0 * (w * y - z * x)
+                    if abs(sinp) >= 1:
+                        pitch = math.copysign(math.pi / 2, sinp)
+                    else:
+                        pitch = math.asin(sinp)
+                    pitch_deg = math.degrees(pitch)
+                    self.info_labels["imu_yaw"].config(text=f"{yaw_deg:.1f}°")
+                    self.info_labels["imu_pitch"].config(text=f"{pitch_deg:.1f}°")
+                elif isinstance(orientation, (list, tuple)) and len(orientation) >= 3:
+                    yaw_rad = float(orientation[2])
+                    self.info_labels["imu_yaw"].config(text=f"{math.degrees(yaw_rad):.1f}°")
+                    self.info_labels["imu_pitch"].config(text="N/A")
                 else:
-                    pitch = math.asin(sinp)
-                pitch_deg = math.degrees(pitch)
-                
-                self.info_labels["imu_yaw"].config(text=f"{yaw_deg:.1f}°")
-                self.info_labels["imu_pitch"].config(text=f"{pitch_deg:.1f}°")
+                    self.info_labels["imu_yaw"].config(text="N/A")
+                    self.info_labels["imu_pitch"].config(text="N/A")
             else:
                 self.info_labels["imu_yaw"].config(text="N/A")
                 self.info_labels["imu_pitch"].config(text="N/A")
@@ -219,4 +231,3 @@ class MonitoringTab:
     def update_debug(self, text: str):
         """Update debug information (compatibility)."""
         pass
-
