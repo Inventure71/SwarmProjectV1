@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import ipaddress
 import json
 import shlex
@@ -46,6 +47,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print commands without executing them",
     )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Parallel robot deployment jobs (default: %(default)s)",
+    )
     return parser.parse_args()
 
 
@@ -70,12 +77,61 @@ def as_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+def require_non_empty(value: Any, field_path: str) -> str:
+    text = str(value).strip() if value is not None else ""
+    if not text:
+        raise SystemExit(f"Missing required {field_path} in fleet config")
+    return text
+
+
 def is_valid_ip(host: str) -> bool:
     try:
         ipaddress.ip_address(host)
         return True
     except ValueError:
         return False
+
+
+def precheck_robot_ssh_access(targets: list[tuple[str, str, str]]) -> None:
+    """
+    Fail fast for parallel deploy if SSH key auth is not ready.
+
+    Also accepts unknown host keys non-interactively (`accept-new`) so parallel runs
+    do not block on first-connect prompts.
+    """
+    if not targets:
+        return
+    print("[deploy_all] running SSH precheck for enabled robots...")
+    failures: list[tuple[str, str]] = []
+    for robot_name, host, user in targets:
+        target = f"{user}@{host}"
+        result = subprocess.run(
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                target,
+                "true",
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            continue
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        failures.append((robot_name, detail))
+
+    if failures:
+        lines = "\n".join(f"  - {name}: {detail}" for name, detail in failures)
+        raise SystemExit(
+            "[deploy_all] SSH precheck failed for one or more robots:\n"
+            f"{lines}\n"
+            "Configure SSH key-based auth for these hosts and retry."
+        )
 
 
 def deploy_server(
@@ -91,7 +147,7 @@ def deploy_server(
 
     host = str(server.get("host", "")).strip()
     user = str(server.get("user", "")).strip()
-    ros_setup = str(server.get("ros_setup", "/opt/ros/jazzy/setup.bash")).strip()
+    ros_setup = require_non_empty(server.get("ros_setup"), "DEPLOYMENT_CONFIG.server.ros_setup")
     remote_root = str(server.get("remote_root", f"/home/{user}/hydra")).strip()
     run_after = as_bool(server.get("run_after_deploy"), True)
 
@@ -128,6 +184,7 @@ def deploy_robots(
     deployment_cfg: dict[str, Any],
     no_run: bool,
     dry_run: bool,
+    jobs: int,
 ) -> None:
     robots_cfg = deployment_cfg.get("robots", {})
     defaults = robots_cfg.get("defaults", {})
@@ -138,6 +195,7 @@ def deploy_robots(
         print("[deploy_all] no robots.devices entries found; skipping robot deployment.")
         return
 
+    deploy_commands: list[tuple[str, str, str, list[str]]] = []
     for robot_name, device_cfg in devices.items():
         if not as_bool(device_cfg.get("enabled"), False):
             continue
@@ -147,7 +205,17 @@ def deploy_robots(
 
         host = str(device_cfg.get("host", robot_cfg.get("ip", ""))).strip()
         user = str(device_cfg.get("user", defaults.get("user", ""))).strip()
-        ros_setup = str(device_cfg.get("ros_setup", defaults.get("ros_setup", "/opt/ros/jazzy/setup.bash"))).strip()
+        device_ros_setup = device_cfg.get("ros_setup")
+        if device_ros_setup is None:
+            ros_setup = require_non_empty(
+                defaults.get("ros_setup"),
+                "DEPLOYMENT_CONFIG.robots.defaults.ros_setup",
+            )
+        else:
+            ros_setup = require_non_empty(
+                device_ros_setup,
+                f"DEPLOYMENT_CONFIG.robots.devices.{robot_name}.ros_setup",
+            )
         remote_root = str(device_cfg.get("remote_root", defaults.get("remote_root", f"/home/{user}/hydra"))).strip()
         run_after = as_bool(device_cfg.get("run_after_deploy"), as_bool(defaults.get("run_after_deploy"), True))
 
@@ -175,7 +243,63 @@ def deploy_robots(
         if no_run or not run_after:
             cmd.append("--no-run")
 
-        run(cmd, repo_root, dry_run)
+        deploy_commands.append((robot_name, host, user, cmd))
+
+    if not deploy_commands:
+        print("[deploy_all] no enabled robots found in robots.devices; skipping robot deployment.")
+        return
+
+    if jobs <= 1 or dry_run or len(deploy_commands) == 1:
+        for _, _, _, cmd in deploy_commands:
+            run(cmd, repo_root, dry_run)
+        return
+
+    max_workers = min(jobs, len(deploy_commands))
+    precheck_robot_ssh_access([(robot_name, host, user) for robot_name, host, user, _ in deploy_commands])
+    print(f"[deploy_all] deploying {len(deploy_commands)} robots in parallel (jobs={max_workers})")
+    for _, _, _, cmd in deploy_commands:
+        print("+", shlex.join(cmd))
+
+    failures: list[str] = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                subprocess.run,
+                cmd,
+                cwd=str(repo_root),
+                check=False,
+                text=True,
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+            ): (robot_name, cmd)
+            for robot_name, _, _, cmd in deploy_commands
+        }
+        for future in as_completed(futures):
+            robot_name, _ = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:  # pragma: no cover - defensive runtime guard
+                failures.append(robot_name)
+                print(f"[deploy_all] [{robot_name}] failed to launch deploy process: {exc}")
+                continue
+
+            if result.returncode == 0:
+                print(f"[deploy_all] [{robot_name}] OK")
+                if result.stdout.strip():
+                    print(f"[deploy_all] [{robot_name}] output:\n{result.stdout.rstrip()}")
+                continue
+
+            failures.append(robot_name)
+            print(f"[deploy_all] [{robot_name}] FAILED (exit {result.returncode})")
+            if result.stdout.strip():
+                print(f"[deploy_all] [{robot_name}] stdout:\n{result.stdout.rstrip()}")
+            if result.stderr.strip():
+                print(f"[deploy_all] [{robot_name}] stderr:\n{result.stderr.rstrip()}", file=sys.stderr)
+
+    if failures:
+        failed_list = ", ".join(sorted(failures))
+        raise SystemExit(f"[deploy_all] robot deployment failed for: {failed_list}")
 
 
 def deploy_ui(repo_root: Path, deployment_cfg: dict[str, Any], dry_run: bool) -> None:
@@ -205,6 +329,8 @@ def deploy_ui(repo_root: Path, deployment_cfg: dict[str, Any], dry_run: bool) ->
 
 def main() -> None:
     args = parse_args()
+    if args.jobs < 1:
+        raise SystemExit("--jobs must be >= 1")
     repo_root = Path(args.repo_root).expanduser().resolve()
     config_path = Path(args.config).expanduser().resolve()
     targets = {t.strip().lower() for t in args.only.split(",") if t.strip()}
@@ -239,6 +365,7 @@ def main() -> None:
             deployment_cfg=deployment,
             no_run=args.no_run,
             dry_run=args.dry_run,
+            jobs=args.jobs,
         )
 
     if "ui" in targets:

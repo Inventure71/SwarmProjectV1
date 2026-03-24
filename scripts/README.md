@@ -5,7 +5,7 @@ This folder contains deployment, runtime, and status utilities for the Hydra ROS
 ## Prerequisites
 
 - Run commands from repo root unless noted.
-- `ssh` key-based access to server/robot hosts is recommended.
+- `ssh` key-based access to server/robot hosts is required (deploy runs non-interactively).
 - For deploy scripts: `rsync`, `ssh`, and local Python 3 must be available.
 - Remote machines must have ROS 2 installed, match configured `ros_setup` paths, and allow non-interactive privileged package install (`root` or passwordless `sudo`) for dependency bootstrap.
 
@@ -25,10 +25,13 @@ Common options:
 python3 ./scripts/deploy_all.py --dry-run
 python3 ./scripts/deploy_all.py --only server
 python3 ./scripts/deploy_all.py --only server,robots --no-run
+python3 ./scripts/deploy_all.py --only robots --jobs 3
 ```
 
 Notes:
 - Dependency installation is always performed during server/robot deploy (the `--use-rosdep` flag is now a deprecated no-op).
+- `DEPLOYMENT_CONFIG.server.ros_setup` and `DEPLOYMENT_CONFIG.robots.defaults.ros_setup` are required; deploy/status scripts fail fast when missing.
+- `--jobs N` parallelizes robot deployments (`N>=1`). Default is `1` (sequential).
 
 ## `deploy_server.sh`
 
@@ -41,7 +44,7 @@ What it does:
 
 How to run:
 ```bash
-bash ./scripts/deploy_server.sh --host <server-ip-or-host> --user <ssh-user>
+bash ./scripts/deploy_server.sh --host <server-ip-or-host> --user <ssh-user> --ros-setup <remote-setup-path>
 ```
 
 Example:
@@ -69,7 +72,7 @@ What it does:
 
 How to run:
 ```bash
-bash ./scripts/deploy_robot.sh --host <robot-ip-or-host> --user <ssh-user> --robot-name <name>
+bash ./scripts/deploy_robot.sh --host <robot-ip-or-host> --user <ssh-user> --robot-name <name> --ros-setup <remote-setup-path>
 ```
 
 Example:
@@ -77,7 +80,8 @@ Example:
 bash ./scripts/deploy_robot.sh \
   --host hypnos \
   --user husarion \
-  --robot-name hypnos
+  --robot-name hypnos \
+  --ros-setup /opt/ros/jazzy/setup.bash
 ```
 
 Useful options:

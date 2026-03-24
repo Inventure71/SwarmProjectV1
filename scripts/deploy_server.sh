@@ -11,11 +11,11 @@ Usage:
 Required:
   --host <ip>               Server host/IP
   --user <username>         SSH username on server
+  --ros-setup <path>        Remote ROS setup script (required)
 
 Options:
   --repo-root <path>        Local repo root (default: auto-detected)
   --remote-root <path>      Remote install root (default: /home/<user>/hydra)
-  --ros-setup <path>        Remote ROS setup script (default: /opt/ros/jazzy/setup.bash)
   --supervisor-ip <ip>      Update HYDRA_CONFIG.supervisor_host before sync
   --use-rosdep              Deprecated no-op (dependencies are always installed)
   --no-clean                Do not remove build/install/log before colcon build
@@ -28,7 +28,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST=""
 USER_NAME=""
 REMOTE_ROOT=""
-ROS_SETUP="ros2_jazzy/install/setup.bash"
+ROS_SETUP=""
 SUPERVISOR_IP=""
 CLEAN_BUILD=1
 RUN_AFTER=1
@@ -49,7 +49,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$HOST" || -z "$USER_NAME" ]]; then
+if [[ -z "$HOST" || -z "$USER_NAME" || -z "$ROS_SETUP" ]]; then
   echo "Missing required arguments." >&2
   usage
   exit 1
@@ -78,8 +78,14 @@ fi
 
 TARGET="$USER_NAME@$HOST"
 SSH_CONTROL_PATH="/tmp/hydra-ssh-%C"
-SSH_OPTS=(-o ControlMaster=auto -o ControlPersist=10m -o ControlPath="$SSH_CONTROL_PATH")
-RSYNC_RSH="ssh -o ControlMaster=auto -o ControlPersist=10m -o ControlPath=$SSH_CONTROL_PATH"
+SSH_OPTS=(
+  -o BatchMode=yes
+  -o StrictHostKeyChecking=accept-new
+  -o ControlMaster=auto
+  -o ControlPersist=10m
+  -o ControlPath="$SSH_CONTROL_PATH"
+)
+RSYNC_RSH="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ControlMaster=auto -o ControlPersist=10m -o ControlPath=$SSH_CONTROL_PATH"
 
 echo "[server] target=$TARGET"
 echo "[server] syncing files..."

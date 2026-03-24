@@ -158,10 +158,7 @@ EOS
 
 # Output fields:
 # kind<TAB>name<TAB>host<TAB>user<TAB>ros_setup<TAB>remote_root<TAB>pid_file<TAB>pattern<TAB>topic<TAB>pose_topic<TAB>alt_pose_topic
-TARGET_ROWS=()
-while IFS= read -r _row; do
-  TARGET_ROWS+=("$_row")
-done < <(python3 - "$CONFIG_PATH" "$ONLY" <<'PY'
+TARGET_ROWS_RAW="$(python3 - "$CONFIG_PATH" "$ONLY" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -173,12 +170,23 @@ cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
 deploy = cfg.get("DEPLOYMENT_CONFIG", {})
 robots_cfg = cfg.get("ROBOT_CONFIG", {})
 
+if not isinstance(deploy, dict):
+    raise SystemExit("Missing DEPLOYMENT_CONFIG in fleet config")
+if not isinstance(robots_cfg, dict):
+    robots_cfg = {}
+
+def require_non_empty(value, field_path):
+    text = str(value).strip() if value is not None else ""
+    if not text:
+        raise SystemExit(f"Missing required {field_path} in fleet config")
+    return text
+
 if "server" in only:
     server = deploy.get("server", {})
     if server.get("enabled", False):
         host = str(server.get("host", "")).strip()
         user = str(server.get("user", "")).strip()
-        ros_setup = str(server.get("ros_setup", "/opt/ros/jazzy/setup.bash")).strip()
+        ros_setup = require_non_empty(server.get("ros_setup"), "DEPLOYMENT_CONFIG.server.ros_setup")
         remote_root = str(server.get("remote_root", f"/home/{user}/hydra")).strip()
         pid_file = f"{remote_root}/logs/supervisor.pid"
         pattern = r"(ros2 launch hydra_bringup supervisor.launch.py|/hydra_supervisor_bridge/lib/hydra_supervisor_bridge/supervisor_bridge)"
@@ -190,13 +198,24 @@ if "robots" in only:
     robots_deploy = deploy.get("robots", {})
     defaults = robots_deploy.get("defaults", {})
     devices = robots_deploy.get("devices", {})
+    if not isinstance(devices, dict):
+        raise SystemExit("DEPLOYMENT_CONFIG.robots.devices must be an object")
     for robot_name, device in devices.items():
         if not isinstance(device, dict) or not device.get("enabled", False):
             continue
-        robot_cfg = robots_cfg.get(robot_name, {}) if isinstance(robots_cfg, dict) else {}
+        robot_cfg = robots_cfg.get(robot_name, {})
         host = str(device.get("host") or robot_cfg.get("ip") or "").strip()
         user = str(device.get("user") or defaults.get("user") or "").strip()
-        ros_setup = str(device.get("ros_setup") or defaults.get("ros_setup") or "/opt/ros/jazzy/setup.bash").strip()
+        if "ros_setup" in device:
+            ros_setup = require_non_empty(
+                device.get("ros_setup"),
+                f"DEPLOYMENT_CONFIG.robots.devices.{robot_name}.ros_setup",
+            )
+        else:
+            ros_setup = require_non_empty(
+                defaults.get("ros_setup"),
+                "DEPLOYMENT_CONFIG.robots.defaults.ros_setup",
+            )
         remote_root = str(device.get("remote_root") or defaults.get("remote_root") or f"/home/{user}/hydra").strip()
         namespace = str(robot_cfg.get("namespace") or f"/{robot_name}").strip()
         if not namespace.startswith("/"):
@@ -212,7 +231,11 @@ if "robots" in only:
         if host and user:
             print("\t".join(["robot", robot_name, host, user, ros_setup, remote_root, pid_file, pattern, topic, pose_topic, alt_pose_topic]))
 PY
-)
+)"
+TARGET_ROWS=()
+while IFS= read -r _row; do
+  [[ -n "$_row" ]] && TARGET_ROWS+=("$_row")
+done <<<"$TARGET_ROWS_RAW"
 
 if [[ ${#TARGET_ROWS[@]} -eq 0 ]]; then
   echo "No enabled targets found for --only=$ONLY"

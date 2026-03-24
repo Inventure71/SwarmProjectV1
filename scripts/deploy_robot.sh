@@ -12,11 +12,11 @@ Required:
   --host <ip>               Robot host/IP
   --user <username>         SSH username on robot
   --robot-name <name>       Robot name in config/fleet.json (example: hypnos)
+  --ros-setup <path>        Remote ROS setup script (required)
 
 Options:
   --repo-root <path>        Local repo root (default: auto-detected)
   --remote-root <path>      Remote install root (default: /home/<user>/hydra)
-  --ros-setup <path>        Remote ROS setup script (default: /opt/ros/jazzy/setup.bash)
   --use-rosdep              Run rosdep install before build (requires sudo when deps are missing)
   --no-clean                Do not remove build/install/log before colcon build
   --no-run                  Build/sync only, do not launch robot agent
@@ -29,7 +29,7 @@ HOST=""
 USER_NAME=""
 ROBOT_NAME=""
 REMOTE_ROOT=""
-ROS_SETUP="/opt/ros/jazzy/setup.bash"
+ROS_SETUP=""
 USE_ROSDEP=0
 CLEAN_BUILD=1
 RUN_AFTER=1
@@ -50,7 +50,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$HOST" || -z "$USER_NAME" || -z "$ROBOT_NAME" ]]; then
+if [[ -z "$HOST" || -z "$USER_NAME" || -z "$ROBOT_NAME" || -z "$ROS_SETUP" ]]; then
   echo "Missing required arguments." >&2
   usage
   exit 1
@@ -62,8 +62,14 @@ fi
 
 TARGET="$USER_NAME@$HOST"
 SSH_CONTROL_PATH="/tmp/hydra-ssh-%C"
-SSH_OPTS=(-o ControlMaster=auto -o ControlPersist=10m -o ControlPath="$SSH_CONTROL_PATH")
-RSYNC_RSH="ssh -o ControlMaster=auto -o ControlPersist=10m -o ControlPath=$SSH_CONTROL_PATH"
+SSH_OPTS=(
+  -o BatchMode=yes
+  -o StrictHostKeyChecking=accept-new
+  -o ControlMaster=auto
+  -o ControlPersist=10m
+  -o ControlPath="$SSH_CONTROL_PATH"
+)
+RSYNC_RSH="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ControlMaster=auto -o ControlPersist=10m -o ControlPath=$SSH_CONTROL_PATH"
 
 echo "[robot] target=$TARGET robot_name=$ROBOT_NAME"
 echo "[robot] syncing files..."

@@ -119,6 +119,11 @@ python3 ./scripts/deploy_all.py \
   --dry-run
 ```
 
+- Parallel robot deploy (faster for many robots):
+```bash
+python3 ./scripts/deploy_all.py --only robots --jobs 3
+```
+
 - Scope to one target:
 ```bash
 python3 ./scripts/deploy_all.py --only server
@@ -135,8 +140,10 @@ Notes:
 - Remote launch commands run in background and write logs under `~/hydra/logs/`.
 - Use `--only server` / `--only robots` / `--only ui` to scope deployment.
 - Use `--dry-run` to print commands without executing them.
+- Use `--jobs N` (for robot target) to deploy multiple robots in parallel.
 - Deploy scripts now always run dependency bootstrap (`rosdep` + workspace dependency install) on targets before build.
 - Targets must allow non-interactive privileged package install (`root` or passwordless `sudo`) and have working apt repositories.
+- Deploy uses non-interactive SSH; set up key-based auth to each target host.
 
 ### Fleet Status Check
 

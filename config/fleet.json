@@ -5,8 +5,8 @@
       "ip": "hypnos",
       "namespace": "/hypnos",
       "type": "real",
-      "umh_id": "umh_2",
-      "pose_topic": "/umh_2/pose",
+      "umh_id": "umh_4",
+      "pose_topic": "/umh_4/pose",
       "cmd_vel_topic": "/cmd_vel",
       "cmd_vel_msg_type": "twist_stamped",
       "battery_topic": "/battery",
@@ -97,8 +97,8 @@
       "ip": "heracles",
       "namespace": "/heracles",
       "type": "real",
-      "umh_id": "umh_4",
-      "pose_topic": "/umh_4/pose",
+      "umh_id": "umh_2",
+      "pose_topic": "/umh_2/pose",
       "cmd_vel_topic": "/cmd_vel",
       "cmd_vel_msg_type": "twist_stamped",
       "battery_topic": "/battery",
@@ -135,30 +135,6 @@
       },
       "color": "#c2c2c2",
       "client_port": 9705,
-      "max_linear": 0.5,
-      "max_angular": 1.5
-    },
-    "dummy_1": {
-      "name": "dummy_1",
-      "ip": null,
-      "namespace": "/dummy_1",
-      "type": "dummy",
-      "umh_id": null,
-      "cmd_vel_topic": "/dummy_1/cmd_vel",
-      "color": "#eaaa2e",
-      "client_port": 0,
-      "max_linear": 0.5,
-      "max_angular": 1.5
-    },
-    "dummy_2": {
-      "name": "dummy_2",
-      "ip": null,
-      "namespace": "/dummy_2",
-      "type": "dummy",
-      "umh_id": null,
-      "cmd_vel_topic": "/dummy_2/cmd_vel",
-      "color": "#742eea",
-      "client_port": 0,
       "max_linear": 0.5,
       "max_angular": 1.5
     }
@@ -206,9 +182,12 @@
         "run_after_deploy": true
       },
       "devices": {
-        "hypnos": {
-          "enabled": true
-        }
+        "hypnos": { "enabled": true },
+        "persephone": { "enabled": true },
+        "icarus": { "enabled": true },
+        "daemon": { "enabled": true },
+        "heracles": { "enabled": true },
+        "theseus": { "enabled": true }
       }
     },
     "ui": {
