@@ -26,12 +26,15 @@ python3 ./scripts/deploy_all.py --dry-run
 python3 ./scripts/deploy_all.py --only server
 python3 ./scripts/deploy_all.py --only server,robots --no-run
 python3 ./scripts/deploy_all.py --only robots --jobs 3
+python3 ./scripts/deploy_all.py --only robots --jobs 3 --connect-timeout 3
 ```
 
 Notes:
 - Dependency installation is always performed during server/robot deploy (the `--use-rosdep` flag is now a deprecated no-op).
 - `DEPLOYMENT_CONFIG.server.ros_setup` and `DEPLOYMENT_CONFIG.robots.defaults.ros_setup` are required; deploy/status scripts fail fast when missing.
 - `--jobs N` parallelizes robot deployments (`N>=1`). Default is `1` (sequential).
+- `--connect-timeout N` bounds per-robot SSH precheck wait (`N>=1`) before parallel robot deploy starts.
+- Robots that fail SSH precheck are skipped; a final summary reports succeeded/failed/skipped robots.
 
 ## `deploy_server.sh`
 

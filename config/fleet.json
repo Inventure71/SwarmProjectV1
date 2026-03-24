@@ -182,12 +182,24 @@
         "run_after_deploy": true
       },
       "devices": {
-        "hypnos": { "enabled": true },
-        "persephone": { "enabled": true },
-        "icarus": { "enabled": true },
-        "daemon": { "enabled": true },
-        "heracles": { "enabled": true },
-        "theseus": { "enabled": true }
+        "hypnos": {
+          "enabled": true
+        },
+        "persephone": {
+          "enabled": true
+        },
+        "icarus": {
+          "enabled": true
+        },
+        "daemon": {
+          "enabled": true
+        },
+        "heracles": {
+          "enabled": true
+        },
+        "theseus": {
+          "enabled": true
+        }
       }
     },
     "ui": {

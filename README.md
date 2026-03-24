@@ -124,6 +124,11 @@ python3 ./scripts/deploy_all.py \
 python3 ./scripts/deploy_all.py --only robots --jobs 3
 ```
 
+- Parallel robot deploy with a short SSH precheck timeout (useful when some robots are offline):
+```bash
+python3 ./scripts/deploy_all.py --only robots --jobs 3 --connect-timeout 3
+```
+
 - Scope to one target:
 ```bash
 python3 ./scripts/deploy_all.py --only server
@@ -141,6 +146,8 @@ Notes:
 - Use `--only server` / `--only robots` / `--only ui` to scope deployment.
 - Use `--dry-run` to print commands without executing them.
 - Use `--jobs N` (for robot target) to deploy multiple robots in parallel.
+- Use `--connect-timeout N` to bound SSH precheck wait per robot when running parallel robot deploy.
+- Robots that fail SSH precheck are skipped, and deploy prints an end-of-run summary of succeeded/failed/skipped robots.
 - Deploy scripts now always run dependency bootstrap (`rosdep` + workspace dependency install) on targets before build.
 - Targets must allow non-interactive privileged package install (`root` or passwordless `sudo`) and have working apt repositories.
 - Deploy uses non-interactive SSH; set up key-based auth to each target host.

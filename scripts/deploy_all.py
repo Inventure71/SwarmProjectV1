@@ -53,6 +53,12 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Parallel robot deployment jobs (default: %(default)s)",
     )
+    parser.add_argument(
+        "--connect-timeout",
+        type=int,
+        default=3,
+        help="SSH connect timeout in seconds for robot precheck (default: %(default)s)",
+    )
     return parser.parse_args()
 
 
@@ -92,46 +98,54 @@ def is_valid_ip(host: str) -> bool:
         return False
 
 
-def precheck_robot_ssh_access(targets: list[tuple[str, str, str]]) -> None:
+def precheck_robot_ssh_access(
+    targets: list[tuple[str, str, str]],
+    connect_timeout: int,
+) -> tuple[set[str], dict[str, str]]:
     """
-    Fail fast for parallel deploy if SSH key auth is not ready.
+    Probe robot SSH access and classify targets as reachable/unreachable.
 
     Also accepts unknown host keys non-interactively (`accept-new`) so parallel runs
     do not block on first-connect prompts.
     """
+    reachable: set[str] = set()
+    failures: dict[str, str] = {}
     if not targets:
-        return
-    print("[deploy_all] running SSH precheck for enabled robots...")
-    failures: list[tuple[str, str]] = []
+        return reachable, failures
+    print(f"[deploy_all] running SSH precheck for enabled robots (timeout={connect_timeout}s)...")
     for robot_name, host, user in targets:
         target = f"{user}@{host}"
-        result = subprocess.run(
-            [
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-                target,
-                "true",
-            ],
-            check=False,
-            text=True,
-            capture_output=True,
-            stdin=subprocess.DEVNULL,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    "ssh",
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "ConnectTimeout=" + str(connect_timeout),
+                    "-o",
+                    "ConnectionAttempts=1",
+                    "-o",
+                    "StrictHostKeyChecking=accept-new",
+                    target,
+                    "true",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                timeout=connect_timeout + 2,
+            )
+        except subprocess.TimeoutExpired:
+            failures[robot_name] = f"timed out after {connect_timeout + 2}s"
+            continue
         if result.returncode == 0:
+            reachable.add(robot_name)
             continue
         detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
-        failures.append((robot_name, detail))
+        failures[robot_name] = detail
 
-    if failures:
-        lines = "\n".join(f"  - {name}: {detail}" for name, detail in failures)
-        raise SystemExit(
-            "[deploy_all] SSH precheck failed for one or more robots:\n"
-            f"{lines}\n"
-            "Configure SSH key-based auth for these hosts and retry."
-        )
+    return reachable, failures
 
 
 def deploy_server(
@@ -185,6 +199,7 @@ def deploy_robots(
     no_run: bool,
     dry_run: bool,
     jobs: int,
+    connect_timeout: int,
 ) -> None:
     robots_cfg = deployment_cfg.get("robots", {})
     defaults = robots_cfg.get("defaults", {})
@@ -249,42 +264,59 @@ def deploy_robots(
         print("[deploy_all] no enabled robots found in robots.devices; skipping robot deployment.")
         return
 
-    if jobs <= 1 or dry_run or len(deploy_commands) == 1:
+    if dry_run:
         for _, _, _, cmd in deploy_commands:
             run(cmd, repo_root, dry_run)
         return
 
-    max_workers = min(jobs, len(deploy_commands))
-    precheck_robot_ssh_access([(robot_name, host, user) for robot_name, host, user, _ in deploy_commands])
-    print(f"[deploy_all] deploying {len(deploy_commands)} robots in parallel (jobs={max_workers})")
-    for _, _, _, cmd in deploy_commands:
+    reachable_robots, precheck_failures = precheck_robot_ssh_access(
+        [(robot_name, host, user) for robot_name, host, user, _ in deploy_commands],
+        connect_timeout=connect_timeout,
+    )
+    if precheck_failures:
+        print("[deploy_all] skipping robots that failed SSH precheck:")
+        for robot_name in sorted(precheck_failures):
+            print(f"[deploy_all]   - {robot_name}: {precheck_failures[robot_name]}")
+
+    runnable_commands = [
+        (robot_name, host, user, cmd)
+        for robot_name, host, user, cmd in deploy_commands
+        if robot_name in reachable_robots
+    ]
+    if not runnable_commands:
+        skipped_sorted = sorted(precheck_failures)
+        skipped_details = ", ".join(f"{name} ({precheck_failures[name]})" for name in skipped_sorted)
+        print("[deploy_all] robot deployment summary:")
+        print("[deploy_all]   succeeded (0): -")
+        print("[deploy_all]   failed (0): -")
+        print(f"[deploy_all]   skipped ({len(skipped_sorted)}): {skipped_details if skipped_details else '-'}")
+        print("[deploy_all] robot deployment skipped: no reachable robots.")
+        raise SystemExit(1)
+
+    max_workers = min(jobs, len(runnable_commands))
+    if max_workers > 1:
+        print(f"[deploy_all] deploying {len(runnable_commands)} reachable robots in parallel (jobs={max_workers})")
+    else:
+        print(f"[deploy_all] deploying {len(runnable_commands)} reachable robot(s) sequentially")
+
+    for _, _, _, cmd in runnable_commands:
         print("+", shlex.join(cmd))
 
+    succeeded: list[str] = []
     failures: list[str] = []
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                subprocess.run,
+    if max_workers <= 1:
+        for robot_name, _, _, cmd in runnable_commands:
+            result = subprocess.run(
                 cmd,
                 cwd=str(repo_root),
                 check=False,
                 text=True,
                 capture_output=True,
                 stdin=subprocess.DEVNULL,
-            ): (robot_name, cmd)
-            for robot_name, _, _, cmd in deploy_commands
-        }
-        for future in as_completed(futures):
-            robot_name, _ = futures[future]
-            try:
-                result = future.result()
-            except Exception as exc:  # pragma: no cover - defensive runtime guard
-                failures.append(robot_name)
-                print(f"[deploy_all] [{robot_name}] failed to launch deploy process: {exc}")
-                continue
-
+            )
             if result.returncode == 0:
+                succeeded.append(robot_name)
                 print(f"[deploy_all] [{robot_name}] OK")
                 if result.stdout.strip():
                     print(f"[deploy_all] [{robot_name}] output:\n{result.stdout.rstrip()}")
@@ -296,10 +328,58 @@ def deploy_robots(
                 print(f"[deploy_all] [{robot_name}] stdout:\n{result.stdout.rstrip()}")
             if result.stderr.strip():
                 print(f"[deploy_all] [{robot_name}] stderr:\n{result.stderr.rstrip()}", file=sys.stderr)
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    subprocess.run,
+                    cmd,
+                    cwd=str(repo_root),
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                    stdin=subprocess.DEVNULL,
+                ): (robot_name, cmd)
+                for robot_name, _, _, cmd in runnable_commands
+            }
+            for future in as_completed(futures):
+                robot_name, _ = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:  # pragma: no cover - defensive runtime guard
+                    failures.append(robot_name)
+                    print(f"[deploy_all] [{robot_name}] failed to launch deploy process: {exc}")
+                    continue
 
-    if failures:
-        failed_list = ", ".join(sorted(failures))
-        raise SystemExit(f"[deploy_all] robot deployment failed for: {failed_list}")
+                if result.returncode == 0:
+                    succeeded.append(robot_name)
+                    print(f"[deploy_all] [{robot_name}] OK")
+                    if result.stdout.strip():
+                        print(f"[deploy_all] [{robot_name}] output:\n{result.stdout.rstrip()}")
+                    continue
+
+                failures.append(robot_name)
+                print(f"[deploy_all] [{robot_name}] FAILED (exit {result.returncode})")
+                if result.stdout.strip():
+                    print(f"[deploy_all] [{robot_name}] stdout:\n{result.stdout.rstrip()}")
+                if result.stderr.strip():
+                    print(f"[deploy_all] [{robot_name}] stderr:\n{result.stderr.rstrip()}", file=sys.stderr)
+
+    succeeded_sorted = sorted(succeeded)
+    failed_sorted = sorted(failures)
+    skipped_sorted = sorted(precheck_failures)
+    print("[deploy_all] robot deployment summary:")
+    print(f"[deploy_all]   succeeded ({len(succeeded_sorted)}): {', '.join(succeeded_sorted) if succeeded_sorted else '-'}")
+    print(f"[deploy_all]   failed ({len(failed_sorted)}): {', '.join(failed_sorted) if failed_sorted else '-'}")
+    if skipped_sorted:
+        skipped_details = ", ".join(f"{name} ({precheck_failures[name]})" for name in skipped_sorted)
+        print(f"[deploy_all]   skipped ({len(skipped_sorted)}): {skipped_details}")
+    else:
+        print("[deploy_all]   skipped (0): -")
+
+    if failures or precheck_failures:
+        print("[deploy_all] robot deployment completed with failures/skips. See summary above.")
+        raise SystemExit(1)
 
 
 def deploy_ui(repo_root: Path, deployment_cfg: dict[str, Any], dry_run: bool) -> None:
@@ -331,6 +411,8 @@ def main() -> None:
     args = parse_args()
     if args.jobs < 1:
         raise SystemExit("--jobs must be >= 1")
+    if args.connect_timeout < 1:
+        raise SystemExit("--connect-timeout must be >= 1")
     repo_root = Path(args.repo_root).expanduser().resolve()
     config_path = Path(args.config).expanduser().resolve()
     targets = {t.strip().lower() for t in args.only.split(",") if t.strip()}
@@ -366,6 +448,7 @@ def main() -> None:
             no_run=args.no_run,
             dry_run=args.dry_run,
             jobs=args.jobs,
+            connect_timeout=args.connect_timeout,
         )
 
     if "ui" in targets:
