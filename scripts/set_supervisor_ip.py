@@ -12,7 +12,7 @@ def parse_args() -> argparse.Namespace:
     default_config = repo_root / "config" / "fleet.json"
 
     parser = argparse.ArgumentParser(
-        description="Set HYDRA_CONFIG.supervisor_host in config/fleet.json",
+        description="Set MOSAIC_CONFIG.supervisor_host in config/fleet.json",
     )
     parser.add_argument("ip", help="Supervisor IP address (IPv4 or IPv6)")
     parser.add_argument(
@@ -40,13 +40,13 @@ def main() -> None:
         raise SystemExit(f"Config file not found: {config_path}")
 
     raw = json.loads(config_path.read_text(encoding="utf-8"))
-    hydra_cfg = raw.setdefault("HYDRA_CONFIG", {})
-    previous = hydra_cfg.get("supervisor_host")
-    hydra_cfg["supervisor_host"] = ip
+    mosaic_cfg = raw.setdefault("MOSAIC_CONFIG", {})
+    previous = mosaic_cfg.get("supervisor_host")
+    mosaic_cfg["supervisor_host"] = ip
 
     config_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     print(f"Updated {config_path}")
-    print(f"HYDRA_CONFIG.supervisor_host: {previous} -> {ip}")
+    print(f"MOSAIC_CONFIG.supervisor_host: {previous} -> {ip}")
 
 
 if __name__ == "__main__":

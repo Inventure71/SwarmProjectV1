@@ -15,7 +15,7 @@ from typing import Any
 def parse_args() -> argparse.Namespace:
     repo_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(
-        description="Deploy Hydra to all devices configured in config/fleet.json",
+        description="Deploy Mosaic to all devices configured in config/fleet.json",
     )
     parser.add_argument(
         "--repo-root",
@@ -41,6 +41,17 @@ def parse_args() -> argparse.Namespace:
         "--no-run",
         action="store_true",
         help="Sync/build only; do not launch services",
+    )
+    autostart_group = parser.add_mutually_exclusive_group()
+    autostart_group.add_argument(
+        "--autostart",
+        action="store_true",
+        help="Enable systemd autostart management on targets (disabled by default)",
+    )
+    autostart_group.add_argument(
+        "--no-autostart",
+        action="store_true",
+        help="Deprecated alias; autostart is already disabled by default",
     )
     parser.add_argument(
         "--dry-run",
@@ -152,6 +163,7 @@ def deploy_server(
     repo_root: Path,
     deployment_cfg: dict[str, Any],
     no_run: bool,
+    autostart: bool,
     dry_run: bool,
 ) -> None:
     server = deployment_cfg.get("server", {})
@@ -162,7 +174,7 @@ def deploy_server(
     host = str(server.get("host", "")).strip()
     user = str(server.get("user", "")).strip()
     ros_setup = require_non_empty(server.get("ros_setup"), "DEPLOYMENT_CONFIG.server.ros_setup")
-    remote_root = str(server.get("remote_root", f"/home/{user}/hydra")).strip()
+    remote_root = str(server.get("remote_root", f"/home/{user}/mosaic")).strip()
     run_after = as_bool(server.get("run_after_deploy"), True)
 
     if not host or not user:
@@ -188,6 +200,8 @@ def deploy_server(
 
     if no_run or not run_after:
         cmd.append("--no-run")
+    if autostart:
+        cmd.append("--autostart")
 
     run(cmd, repo_root, dry_run)
 
@@ -197,6 +211,7 @@ def deploy_robots(
     config: dict[str, Any],
     deployment_cfg: dict[str, Any],
     no_run: bool,
+    autostart: bool,
     dry_run: bool,
     jobs: int,
     connect_timeout: int,
@@ -231,7 +246,7 @@ def deploy_robots(
                 device_ros_setup,
                 f"DEPLOYMENT_CONFIG.robots.devices.{robot_name}.ros_setup",
             )
-        remote_root = str(device_cfg.get("remote_root", defaults.get("remote_root", f"/home/{user}/hydra"))).strip()
+        remote_root = str(device_cfg.get("remote_root", defaults.get("remote_root", f"/home/{user}/mosaic"))).strip()
         run_after = as_bool(device_cfg.get("run_after_deploy"), as_bool(defaults.get("run_after_deploy"), True))
 
         if not host or host.startswith("REPLACE_WITH_"):
@@ -257,6 +272,8 @@ def deploy_robots(
         ]
         if no_run or not run_after:
             cmd.append("--no-run")
+        if autostart:
+            cmd.append("--autostart")
 
         deploy_commands.append((robot_name, host, user, cmd))
 
@@ -431,12 +448,17 @@ def main() -> None:
 
     if args.use_rosdep:
         print("[deploy_all] --use-rosdep is deprecated; dependency installation is now always enabled.")
+    if args.autostart:
+        print("[deploy_all] autostart mode: enabled (systemd services installed/managed).")
+    else:
+        print("[deploy_all] startup mode: manual (mosaic_start.sh installed; no boot autostart).")
 
     if "server" in targets:
         deploy_server(
             repo_root=repo_root,
             deployment_cfg=deployment,
             no_run=args.no_run,
+            autostart=args.autostart,
             dry_run=args.dry_run,
         )
 
@@ -446,6 +468,7 @@ def main() -> None:
             config=cfg,
             deployment_cfg=deployment,
             no_run=args.no_run,
+            autostart=args.autostart,
             dry_run=args.dry_run,
             jobs=args.jobs,
             connect_timeout=args.connect_timeout,

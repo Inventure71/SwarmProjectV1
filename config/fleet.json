@@ -139,7 +139,7 @@
       "max_angular": 1.5
     }
   },
-  "HYDRA_CONFIG": {
+  "MOSAIC_CONFIG": {
     "supervisor_host": "10.205.3.113",
     "supervisor_port": 9998,
     "state_broadcast_hz": 20,
@@ -171,14 +171,14 @@
       "host": "10.205.3.113",
       "user": "hermes",
       "ros_setup": "/home/hermes/ros2_jazzy/install/setup.bash",
-      "remote_root": "/home/hermes/hydra",
+      "remote_root": "/home/hermes/mosaic",
       "run_after_deploy": true
     },
     "robots": {
       "defaults": {
         "user": "husarion",
         "ros_setup": "/opt/ros/jazzy/setup.bash",
-        "remote_root": "/home/husarion/hydra",
+        "remote_root": "/home/husarion/mosaic",
         "run_after_deploy": true
       },
       "devices": {

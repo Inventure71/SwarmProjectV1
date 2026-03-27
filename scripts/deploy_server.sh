@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Deploy, build, and run Hydra supervisor stack on one server.
+Deploy, build, and run Mosaic supervisor stack on one server.
 
 Usage:
   ./scripts/deploy_server.sh --host <ip> --user <username> [options]
@@ -15,11 +15,13 @@ Required:
 
 Options:
   --repo-root <path>        Local repo root (default: auto-detected)
-  --remote-root <path>      Remote install root (default: /home/<user>/hydra)
-  --supervisor-ip <ip>      Update HYDRA_CONFIG.supervisor_host before sync
+  --remote-root <path>      Remote install root (default: /home/<user>/mosaic)
+  --supervisor-ip <ip>      Update MOSAIC_CONFIG.supervisor_host before sync
   --use-rosdep              Deprecated no-op (dependencies are always installed)
   --no-clean                Do not remove build/install/log before colcon build
-  --no-run                  Build/sync only, do not launch supervisor bridge
+  --no-run                  Build/sync only; do not start service/process now
+  --autostart               Enable systemd autostart management for supervisor service
+  --no-autostart            Disable systemd autostart management (default)
   -h, --help                Show this help
 EOF
 }
@@ -32,6 +34,7 @@ ROS_SETUP=""
 SUPERVISOR_IP=""
 CLEAN_BUILD=1
 RUN_AFTER=1
+AUTOSTART=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,6 +47,8 @@ while [[ $# -gt 0 ]]; do
     --use-rosdep) echo "[server] --use-rosdep is deprecated; dependencies are always installed."; shift ;;
     --no-clean) CLEAN_BUILD=0; shift ;;
     --no-run) RUN_AFTER=0; shift ;;
+    --autostart) AUTOSTART=1; shift ;;
+    --no-autostart) AUTOSTART=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
   esac
@@ -56,7 +61,7 @@ if [[ -z "$HOST" || -z "$USER_NAME" || -z "$ROS_SETUP" ]]; then
 fi
 
 if [[ -z "$REMOTE_ROOT" ]]; then
-  REMOTE_ROOT="/home/$USER_NAME/hydra"
+  REMOTE_ROOT="/home/$USER_NAME/mosaic"
 fi
 
 if [[ -n "$SUPERVISOR_IP" ]]; then
@@ -70,14 +75,14 @@ cfg_path = Path(sys.argv[1]).resolve()
 ip = sys.argv[2]
 ipaddress.ip_address(ip)
 raw = json.loads(cfg_path.read_text(encoding="utf-8"))
-raw.setdefault("HYDRA_CONFIG", {})["supervisor_host"] = ip
+raw.setdefault("MOSAIC_CONFIG", {})["supervisor_host"] = ip
 cfg_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
 print(f"Updated {cfg_path} supervisor_host={ip}")
 EOF
 fi
 
 TARGET="$USER_NAME@$HOST"
-SSH_CONTROL_PATH="/tmp/hydra-ssh-%C"
+SSH_CONTROL_PATH="/tmp/mosaic-ssh-%C"
 SSH_OPTS=(
   -o BatchMode=yes
   -o StrictHostKeyChecking=accept-new
@@ -179,14 +184,17 @@ if [[ "$CLEAN_BUILD" == "1" ]]; then
   rm -rf build install log
 fi
 
-colcon list | grep -E 'hydra_(interfaces|common|supervisor_bridge|optitrack_bridge|bringup)' >/dev/null
+colcon list | grep -E 'mosaic_(interfaces|common|supervisor_bridge|optitrack_bridge|bringup)' >/dev/null
 colcon build --symlink-install --packages-select \
-  hydra_interfaces hydra_common hydra_supervisor_bridge hydra_optitrack_bridge hydra_bringup
+  mosaic_interfaces mosaic_common mosaic_supervisor_bridge mosaic_optitrack_bridge mosaic_bringup
 EOF
 
-if [[ "$RUN_AFTER" == "1" ]]; then
-  echo "[server] launching supervisor bridge in background..."
-  ssh "${SSH_OPTS[@]}" "$TARGET" "REMOTE_ROOT='$REMOTE_ROOT' ROS_SETUP='$ROS_SETUP' bash -s" <<'EOF'
+START_SCRIPT="$REMOTE_ROOT/mosaic_start.sh"
+SERVICE_NAME="mosaic-supervisor.service"
+UNIT_PATH="/etc/systemd/system/$SERVICE_NAME"
+
+echo "[server] installing manual start script ($START_SCRIPT)..."
+ssh "${SSH_OPTS[@]}" "$TARGET" "REMOTE_ROOT='$REMOTE_ROOT' ROS_SETUP='$ROS_SETUP' START_SCRIPT='$START_SCRIPT' bash -s" <<'EOF'
 set -euo pipefail
 
 if [[ ! -f "$ROS_SETUP" ]]; then
@@ -194,24 +202,132 @@ if [[ ! -f "$ROS_SETUP" ]]; then
   exit 1
 fi
 
+cat > "$START_SCRIPT" <<SCRIPT
+#!/usr/bin/env bash
+set -euo pipefail
+ROS_SETUP="$ROS_SETUP"
+REMOTE_ROOT="$REMOTE_ROOT"
+
+if [[ ! -f "\$ROS_SETUP" ]]; then
+  echo "ROS setup script not found: \$ROS_SETUP" >&2
+  exit 1
+fi
+
 set +u
-source "$ROS_SETUP"
+source "\$ROS_SETUP"
 set -u
-cd "$REMOTE_ROOT/ros2_ws"
+cd "\$REMOTE_ROOT/ros2_ws"
 set +u
-source install/setup.bash
+source "\$REMOTE_ROOT/ros2_ws/install/setup.bash"
 set -u
 
-  pkill -f "ros2 launch hydra_bringup supervisor.launch.py" || true
-  pkill -f "/hydra_supervisor_bridge/lib/hydra_supervisor_bridge/supervisor_bridge" || true
-  rm -f "$REMOTE_ROOT/logs/supervisor.pid"
+pkill -f "ros2 launch mosaic_bringup supervisor.launch.py" || true
+pkill -f "/mosaic_supervisor_bridge/lib/mosaic_supervisor_bridge/supervisor_bridge" || true
+rm -f "\$REMOTE_ROOT/logs/supervisor.pid"
 
-  nohup bash -c "set +u; source '$ROS_SETUP'; source '$REMOTE_ROOT/ros2_ws/install/setup.bash'; set -u; cd '$REMOTE_ROOT/ros2_ws'; exec ros2 launch hydra_bringup supervisor.launch.py config_path:=$REMOTE_ROOT/config/fleet.json" \
-  > "$REMOTE_ROOT/logs/supervisor.log" 2>&1 < /dev/null &
+nohup ros2 launch mosaic_bringup supervisor.launch.py config_path:=\$REMOTE_ROOT/config/fleet.json \
+> "\$REMOTE_ROOT/logs/supervisor.log" 2>&1 < /dev/null &
 
-  echo $! > "$REMOTE_ROOT/logs/supervisor.pid"
-echo "supervisor_bridge started (pid=$(cat "$REMOTE_ROOT/logs/supervisor.pid"))"
-echo "log: $REMOTE_ROOT/logs/supervisor.log"
+echo \$! > "\$REMOTE_ROOT/logs/supervisor.pid"
+pid="\$(cat "\$REMOTE_ROOT/logs/supervisor.pid")"
+echo "supervisor_bridge started (pid=\$pid)"
+echo "log: \$REMOTE_ROOT/logs/supervisor.log"
+SCRIPT
+
+chmod +x "$START_SCRIPT"
+EOF
+
+if [[ "$AUTOSTART" == "1" ]]; then
+  echo "[server] installing/updating systemd service ($SERVICE_NAME)..."
+  ssh "${SSH_OPTS[@]}" "$TARGET" "REMOTE_ROOT='$REMOTE_ROOT' ROS_SETUP='$ROS_SETUP' USER_NAME='$USER_NAME' SERVICE_NAME='$SERVICE_NAME' UNIT_PATH='$UNIT_PATH' RUN_AFTER='$RUN_AFTER' bash -s" <<'EOF'
+set -euo pipefail
+
+run_privileged() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "sudo is required to manage systemd services on the target." >&2
+    exit 1
+  fi
+  if ! sudo -n true >/dev/null 2>&1; then
+    echo "Passwordless sudo is required for systemd service management on the target." >&2
+    exit 1
+  fi
+  sudo -n -H "$@"
+}
+
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo "systemctl is unavailable on target; cannot manage autostart service." >&2
+  exit 1
+fi
+
+UNIT_TMP="$(mktemp)"
+cat > "$UNIT_TMP" <<UNIT
+[Unit]
+Description=Mosaic Supervisor Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$USER_NAME
+WorkingDirectory=$REMOTE_ROOT/ros2_ws
+ExecStart=/bin/bash -lc 'set +u; source "$ROS_SETUP"; source "$REMOTE_ROOT/ros2_ws/install/setup.bash"; set -u; exec ros2 launch mosaic_bringup supervisor.launch.py config_path:=$REMOTE_ROOT/config/fleet.json'
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+run_privileged install -m 0644 "$UNIT_TMP" "$UNIT_PATH"
+rm -f "$UNIT_TMP"
+
+run_privileged systemctl daemon-reload
+run_privileged systemctl enable "$SERVICE_NAME"
+if [[ "$RUN_AFTER" == "1" ]]; then
+  run_privileged systemctl restart "$SERVICE_NAME"
+  echo "supervisor service started: $SERVICE_NAME"
+else
+  run_privileged systemctl stop "$SERVICE_NAME" || true
+  echo "supervisor service installed+enabled but not started (--no-run)."
+fi
+EOF
+else
+  echo "[server] autostart disabled (manual start script mode)."
+  ssh "${SSH_OPTS[@]}" "$TARGET" "SERVICE_NAME='$SERVICE_NAME' UNIT_PATH='$UNIT_PATH' RUN_AFTER='$RUN_AFTER' START_SCRIPT='$START_SCRIPT' bash -s" <<'EOF'
+set -euo pipefail
+
+run_privileged_if_possible() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+    return 0
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    sudo -n -H "$@"
+    return 0
+  fi
+  return 1
+}
+
+if command -v systemctl >/dev/null 2>&1; then
+  if run_privileged_if_possible true; then
+    run_privileged_if_possible systemctl disable --now "$SERVICE_NAME" || true
+    run_privileged_if_possible rm -f "$UNIT_PATH" || true
+    run_privileged_if_possible systemctl daemon-reload || true
+    run_privileged_if_possible systemctl reset-failed "$SERVICE_NAME" || true
+  else
+    echo "warning: could not remove existing systemd service (missing passwordless sudo). continuing with manual start script."
+  fi
+fi
+
+if [[ "$RUN_AFTER" == "1" ]]; then
+  "$START_SCRIPT"
+else
+  echo "manual start script installed. run: $START_SCRIPT"
+fi
 EOF
 fi
 

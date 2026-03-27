@@ -1,3 +1,3 @@
-"""Frontend utilities for the Hydra client application."""
+"""Frontend utilities for the Mosaic client application."""
 
 

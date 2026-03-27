@@ -171,21 +171,21 @@ class ConfigLoader:
         """
         return ConfigLoader._config
 
-    def get_hydra_config(self):
+    def get_mosaic_config(self):
         """
-        Get Hydra supervisor bridge configuration.
+        Get Mosaic supervisor bridge configuration.
 
         Returns:
-            dict: Hydra configuration dictionary.
+            dict: Mosaic configuration dictionary.
         """
-        return ConfigLoader._config.get('HYDRA_CONFIG', {})
+        return ConfigLoader._config.get('MOSAIC_CONFIG', {})
 
     def get_supervisor_endpoint(self) -> Tuple[str, int]:
         """Get supervisor bridge host and port tuple for convenience."""
-        hydra_cfg = self.get_hydra_config()
+        mosaic_cfg = self.get_mosaic_config()
         return (
-            hydra_cfg.get('supervisor_host', 'localhost'),
-            int(hydra_cfg.get('supervisor_port', 9998)),
+            mosaic_cfg.get('supervisor_host', 'localhost'),
+            int(mosaic_cfg.get('supervisor_port', 9998)),
         )
 
 

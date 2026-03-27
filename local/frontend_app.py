@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hydra frontend controller application - Refactored with modular architecture."""
+"""Mosaic frontend controller application - Refactored with modular architecture."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from ui.tabs import DashboardTab, RobotsTab, PathPlanningTab, SettingsTab, Monit
 
 
 class RobotControllerApp:
-    """Frontend UI that communicates with the Hydra supervisor bridge."""
+    """Frontend UI that communicates with the Mosaic supervisor bridge."""
 
     def __init__(self) -> None:
         # Initialize state
@@ -65,7 +65,7 @@ class RobotControllerApp:
         """Load configuration and initialize robots."""
         self.config_loader = load_config()
         robot_config = self.config_loader.get_robot_config()
-        hydra_host, hydra_port = self.config_loader.get_supervisor_endpoint()
+        mosaic_host, mosaic_port = self.config_loader.get_supervisor_endpoint()
 
         # Load canvas configuration
         canvas_config = self.config_loader.get_config().get("CANVAS_CONFIG", {})
@@ -75,7 +75,7 @@ class RobotControllerApp:
         self.state.zoom_step = canvas_config.get("zoom_step", 0.1)
 
         # Setup UDP client and supervisor proxy
-        self.udp_client = UDPClient(hydra_host, hydra_port, on_message=self._on_supervisor_message)
+        self.udp_client = UDPClient(mosaic_host, mosaic_port, on_message=self._on_supervisor_message)
         self.supervisor_controller = BackendControllerProxy(self.udp_client)
         self.command_sender = CommandSender(self.udp_client)
         self.message_handler = None
@@ -104,7 +104,7 @@ class RobotControllerApp:
         from tkinter import messagebox
 
         self.root = tk.Tk()
-        self.root.title("🤖 Hydra Robot Swarm Controller")
+        self.root.title("🤖 Mosaic Robot Swarm Controller")
         self.root.configure(bg="#0f0f0f")
         self.root.protocol("WM_DELETE_WINDOW", self.shutdown)
         self.root.geometry("1800x1000")

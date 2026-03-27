@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UDP client for communicating with the Hydra supervisor bridge."""
+"""UDP client for communicating with the Mosaic supervisor bridge."""
 
 from __future__ import annotations
 

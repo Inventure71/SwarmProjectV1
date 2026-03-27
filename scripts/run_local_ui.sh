@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Run the Hydra local Tk UI on the current machine.
+Run the Mosaic local Tk UI on the current machine.
 
 Usage:
   ./scripts/run_local_ui.sh [options]

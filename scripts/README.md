@@ -1,6 +1,6 @@
 # Scripts Guide
 
-This folder contains deployment, runtime, and status utilities for the Hydra ROS 2 swarm stack.
+This folder contains deployment, runtime, and status utilities for the Mosaic ROS 2 swarm stack.
 
 ## Prerequisites
 
@@ -25,6 +25,7 @@ Common options:
 python3 ./scripts/deploy_all.py --dry-run
 python3 ./scripts/deploy_all.py --only server
 python3 ./scripts/deploy_all.py --only server,robots --no-run
+python3 ./scripts/deploy_all.py --only server,robots --autostart
 python3 ./scripts/deploy_all.py --only robots --jobs 3
 python3 ./scripts/deploy_all.py --only robots --jobs 3 --connect-timeout 3
 ```
@@ -32,6 +33,11 @@ python3 ./scripts/deploy_all.py --only robots --jobs 3 --connect-timeout 3
 Notes:
 - Dependency installation is always performed during server/robot deploy (the `--use-rosdep` flag is now a deprecated no-op).
 - `DEPLOYMENT_CONFIG.server.ros_setup` and `DEPLOYMENT_CONFIG.robots.defaults.ros_setup` are required; deploy/status scripts fail fast when missing.
+- Manual startup script mode is default: deploy installs `mosaic_start.sh` per target and does not require boot-time autostart.
+- Same manual start command works on server/robots: `bash <install_location>/mosaic_start.sh` (or `sudo bash <install_location>/mosaic_start.sh`).
+- `--autostart` enables systemd-managed boot startup on targets.
+- `--no-autostart` keeps manual startup-script mode (default).
+- `--no-run` means deploy/build only for this invocation.
 - `--jobs N` parallelizes robot deployments (`N>=1`). Default is `1` (sequential).
 - `--connect-timeout N` bounds per-robot SSH precheck wait (`N>=1`) before parallel robot deploy starts.
 - Robots that fail SSH precheck are skipped; a final summary reports succeeded/failed/skipped robots.
@@ -41,9 +47,12 @@ Notes:
 What it does:
 - Syncs server/shared/orchestration ROS 2 packages + config to one server.
 - Builds selected packages on remote.
-- Optionally launches supervisor bridge in background and writes:
-  - `~/hydra/logs/supervisor.log`
-  - `~/hydra/logs/supervisor.pid`
+- Installs a manual runtime launcher script at `<remote_root>/mosaic_start.sh`.
+- In default mode, runtime is started by that script (manual trigger model).
+- With `--autostart`, installs/updates `mosaic-supervisor.service` and can enable boot startup.
+- Manual script runtime files:
+  - `~/mosaic/logs/supervisor.log`
+  - `~/mosaic/logs/supervisor.pid`
 
 How to run:
 ```bash
@@ -59,19 +68,24 @@ bash ./scripts/deploy_server.sh \
 ```
 
 Useful options:
-- `--supervisor-ip <ip>` update `HYDRA_CONFIG.supervisor_host` before sync
+- `--supervisor-ip <ip>` update `MOSAIC_CONFIG.supervisor_host` before sync
 - `--use-rosdep` (deprecated no-op)
 - `--no-clean`
 - `--no-run`
+- `--autostart`
+- `--no-autostart`
 
 ## `deploy_robot.sh`
 
 What it does:
 - Syncs robot/shared/orchestration ROS 2 packages + config to one robot.
 - Builds selected packages on remote.
-- Optionally launches robot agent in background and writes:
-  - `~/hydra/logs/robot_<robot-name>.log`
-  - `~/hydra/logs/robot_<robot-name>.pid`
+- Installs a manual runtime launcher script at `<remote_root>/mosaic_start.sh`.
+- In default mode, runtime is started by that script (manual trigger model).
+- With `--autostart`, installs/updates `mosaic-robot-agent-<robot-name>.service` and can enable boot startup.
+- Manual script runtime files:
+  - `~/mosaic/logs/robot_<robot-name>.log`
+  - `~/mosaic/logs/robot_<robot-name>.pid`
 
 How to run:
 ```bash
@@ -91,6 +105,8 @@ Useful options:
 - `--use-rosdep` (deprecated no-op)
 - `--no-clean`
 - `--no-run`
+- `--autostart`
+- `--no-autostart`
 
 ## `run_local_ui.sh`
 
@@ -111,7 +127,7 @@ Background files:
 ## `set_supervisor_ip.py`
 
 What it does:
-- Updates `HYDRA_CONFIG.supervisor_host` in `config/fleet.json`.
+- Updates `MOSAIC_CONFIG.supervisor_host` in `config/fleet.json`.
 - Validates IP format before writing.
 
 How to run:

@@ -98,10 +98,10 @@ if [[ -f "$PID_FILE" ]]; then
   fi
 fi
 
-if pgrep -af "$PATTERN" >/tmp/hydra_status_matches.$$ 2>/dev/null; then
-  count="$(wc -l < /tmp/hydra_status_matches.$$ | tr -d '[:space:]')"
-  first="$(head -n 1 /tmp/hydra_status_matches.$$)"
-  rm -f /tmp/hydra_status_matches.$$ || true
+if pgrep -af "$PATTERN" >/tmp/mosaic_status_matches.$$ 2>/dev/null; then
+  count="$(wc -l < /tmp/mosaic_status_matches.$$ | tr -d '[:space:]')"
+  first="$(head -n 1 /tmp/mosaic_status_matches.$$)"
+  rm -f /tmp/mosaic_status_matches.$$ || true
   if [[ "${count:-0}" -gt 1 ]]; then
     echo "RUNNING_PATTERN_MULTI|count=$count|$first"
   else
@@ -109,7 +109,7 @@ if pgrep -af "$PATTERN" >/tmp/hydra_status_matches.$$ 2>/dev/null; then
   fi
   exit 0
 fi
-rm -f /tmp/hydra_status_matches.$$ || true
+rm -f /tmp/mosaic_status_matches.$$ || true
 
 if [[ -n "$pid_line" ]]; then
   echo "PID_ALIVE_UNEXPECTED|$pid_line"
@@ -187,10 +187,10 @@ if "server" in only:
         host = str(server.get("host", "")).strip()
         user = str(server.get("user", "")).strip()
         ros_setup = require_non_empty(server.get("ros_setup"), "DEPLOYMENT_CONFIG.server.ros_setup")
-        remote_root = str(server.get("remote_root", f"/home/{user}/hydra")).strip()
+        remote_root = str(server.get("remote_root", f"/home/{user}/mosaic")).strip()
         pid_file = f"{remote_root}/logs/supervisor.pid"
-        pattern = r"(ros2 launch hydra_bringup supervisor.launch.py|/hydra_supervisor_bridge/lib/hydra_supervisor_bridge/supervisor_bridge)"
-        topic = "/hydra/supervisor_heartbeat"
+        pattern = r"(ros2 launch mosaic_bringup supervisor.launch.py|/mosaic_supervisor_bridge/lib/mosaic_supervisor_bridge/supervisor_bridge)"
+        topic = "/mosaic/supervisor_heartbeat"
         if host and user:
             print("\t".join(["server", "server", host, user, ros_setup, remote_root, pid_file, pattern, topic, "", ""]))
 
@@ -216,13 +216,13 @@ if "robots" in only:
                 defaults.get("ros_setup"),
                 "DEPLOYMENT_CONFIG.robots.defaults.ros_setup",
             )
-        remote_root = str(device.get("remote_root") or defaults.get("remote_root") or f"/home/{user}/hydra").strip()
+        remote_root = str(device.get("remote_root") or defaults.get("remote_root") or f"/home/{user}/mosaic").strip()
         namespace = str(robot_cfg.get("namespace") or f"/{robot_name}").strip()
         if not namespace.startswith("/"):
             namespace = "/" + namespace
-        topic = f"{namespace}/hydra/status"
+        topic = f"{namespace}/mosaic/status"
         pid_file = f"{remote_root}/logs/robot_{robot_name}.pid"
-        pattern = rf"(ros2 launch hydra_bringup robot_agent.launch.py .*robot_name:={robot_name}|/hydra_robot_agent/lib/hydra_robot_agent/robot_agent)"
+        pattern = rf"(ros2 launch mosaic_bringup robot_agent.launch.py .*robot_name:={robot_name}|/mosaic_robot_agent/lib/mosaic_robot_agent/robot_agent)"
         pose_topic = str(robot_cfg.get("pose_topic") or "").strip()
         umh_id = str(robot_cfg.get("umh_id") or "").strip()
         if not pose_topic and umh_id:
